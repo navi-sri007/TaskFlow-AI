@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>My Personal Assistant</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="container">
+      <!-- Tab Buttons -->
+      <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('tasks')">
+          📋 Tasks
+        </button>
+        <button class="tab-btn" onclick="switchTab('notes')">📝 Notes</button>
+        <button class="tab-btn" onclick="switchTab('reminders')">
+          ⏰ Reminders
+        </button>
+        <button class="tab-btn" onclick="switchTab('chatbot')">
+          🤖 Chatbot
+        </button>
+      </div>
+
+      <!-- Tasks Tab -->
+      <div id="tasks-tab" class="tab-content active">
+        <h2>Add New Task</h2>
+        <form id="taskForm">
+          <input type="text" id="taskTitle" placeholder="Task title" required />
+          <select id="taskPriority">
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="important">Important</option>
+          </select>
+          <input type="date" id="taskDueDate" />
+          <button type="submit">Add Task</button>
+        </form>
+        <div id="tasksList"></div>
+      </div>
+
+      <!-- Notes Tab -->
+      <div id="notes-tab" class="tab-content">
+        <h2>Add New Note</h2>
+        <form id="noteForm">
+          <input type="text" id="noteTitle" placeholder="Note title" />
+          <textarea
+            id="noteContent"
+            rows="5"
+            placeholder="Write your note here..."
+          ></textarea>
+          <button type="submit">Save Note</button>
+        </form>
+        <div id="notesList"></div>
+      </div>
+
+      <!-- Reminders Tab -->
+      <div id="reminders-tab" class="tab-content">
+        <h2>Add New Reminder</h2>
+        <form id="reminderForm">
+          <input
+            type="text"
+            id="reminderTitle"
+            placeholder="Reminder title"
+            required
+          />
+          <input type="datetime-local" id="reminderTime" />
+
+          <button type="submit">Set Reminder</button>
+        </form>
+        <div id="remindersList"></div>
+      </div>
+
+      <!-- Chatbot Tab -->
+      <div id="chatbot-tab" class="tab-content">
+        <h2>Chat with Assistant</h2>
+        <div class="chat-area">
+          <div class="chat-messages" id="chatMessages">
+            <div class="bot-message">
+              👋 Hello! Ask me about your tasks, notes, or reminders!
+            </div>
+          </div>
+          <div class="chat-input-area">
+            <input
+              type="text"
+              id="chatInput"
+              placeholder="e.g., list important tasks first 5"
+            />
+            <button onclick="sendMessage()">Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="script.js"></script>
+  </body>
+</html>
