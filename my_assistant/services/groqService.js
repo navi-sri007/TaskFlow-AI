@@ -12,52 +12,28 @@ const conversationHistory = new Map();
 function getSystemPrompt() {
   return `You are a helpful personal assistant that manages tasks, notes, and reminders.
 
-You have access to the user's data through functions. When the user asks about:
-- TASKS: You will receive task data (title, dueDate, priority, completed)
-- NOTES: You will receive note data (title, content, createdAt)
-- REMINDERS: You will receive reminder data (title, remindAt, repeat)
+CRITICAL RULES:
+- If user says "update", "change", "modify", "set its", "change its" → USE UPDATE_TASK
+- If user says "create", "add", "new" → USE CREATE_TASK
+- NEVER create a new task when user wants to update an existing one
 
-Your job is to:
-1. Answer questions about the user's tasks, notes, and reminders
-2. Maintain context between questions (e.g., "what about the second one?" refers to previous answer)
-3. Help the user manage their data naturally
-4. **CREATE new items when the user asks to add something**
-5. Always refer the past conversation or the previous conversation if it present, then provide the answer to the present question based on it, if its relevant.
+ACTION FORMATS:
 
-Be conversational, helpful, and concise and don't be rude.
-
-IMPORTANT ACTION RULES:
-When the user asks to CREATE something, respond with an action in this exact format:
-
-For TASKS:
+CREATE_TASK (only for new tasks):
 ACTION: CREATE_TASK|title|priority|dueDate
 
-For NOTES:
-ACTION: CREATE_NOTE|title|content
+UPDATE_TASK (for existing tasks):
+ACTION: UPDATE_TASK|existing_title|field_to_update|new_value
 
-For REMINDERS:
-ACTION: CREATE_REMINDER|title|remindAt
+UPDATE Examples:
+- User: "update its duedate to tomorrow" → ACTION: UPDATE_TASK|UPDATE|dueDate|tomorrow
+- User: "update its priority as low" → ACTION: UPDATE_TASK|UPDATE|priority|low
+- User: "set its duedate to tomorrow" → ACTION: UPDATE_TASK|UPDATE|dueDate|tomorrow
+- User: "change priority to high" → ACTION: UPDATE_TASK|task_title|priority|high
 
-Examples:
-- User: "Add a task to buy groceries tomorrow with high priority"
-  Response: ACTION: CREATE_TASK|buy groceries|high|tomorrow
+Available fields for UPDATE_TASK: dueDate, priority, title, completed
 
-- User: "Remind me to call mom on May 15th at 2pm"
-  Response: ACTION: CREATE_REMINDER|call mom|2026-05-15T14:00:00
-
-- User: "Take a note: Meeting notes with client about budget"
-  Response: ACTION: CREATE_NOTE|Meeting notes|Client meeting about budget
-
-- User: "Create a task to finish the report by Friday"
-  Response: ACTION: CREATE_TASK|finish the report|medium|this Friday
-
-Rules for actions:
-- Extract priority (low/medium/high/important) from the message
-- Parse dates intelligently (today, tomorrow, next Monday, specific dates)
-- For notes, the title is a short summary, content is the detailed text
-- Only generate one action per response
-- After generating action, add a friendly confirmation message
-- Do not include explanations before or after the action in separate lines - keep action as the first line`;
+Always output ACTION: on the first line.`;
 }
 async function getAIResponse(userMessage, contextData, sessionId) {
   try {
@@ -325,6 +301,33 @@ function extractAction(response) {
     }
   }
 
+  // In extractAction() function, add this section:
+
+  // Check for UPDATE_TASK action
+  if (response.includes("ACTION: UPDATE_TASK")) {
+    const match = response.match(
+      /ACTION: UPDATE_TASK\|([^|]+)\|([^|]+)\|(.+?)(?:\n|$)/,
+    );
+    if (match) {
+      return {
+        type: "UPDATE_TASK",
+        searchQuery: match[1].trim(),
+        field: match[2].trim(),
+        newValue: match[3].trim(),
+      };
+    }
+  }
+
+  // Check for DELETE_TASK action
+  if (response.includes("ACTION: DELETE_TASK")) {
+    const match = response.match(/ACTION: DELETE_TASK\|([^|]+)/);
+    if (match) {
+      return {
+        type: "DELETE_TASK",
+        searchQuery: match[1].trim(),
+      };
+    }
+  }
   return null;
 }
 

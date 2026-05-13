@@ -8,7 +8,19 @@ const ChatSchema = new mongoose.Schema({
   responseData: { type: Object, default: {} },
   actionTaken: {
     type: String,
-    enum: ["CREATE_TASK", "CREATE_NOTE", "CREATE_REMINDER", null],
+    enum: [
+      null,
+      "CREATE_TASK",
+      "UPDATE_TASK",
+      "CREATE_NOTE",
+      "UPDATE_NOTE",
+      "CREATE_REMINDER",
+      "UPDATE_REMINDER",
+      "DELETE_TASK",
+      "DELETE_NOTE",
+      "DELETE_REMINDER",
+      "VIEW_TASKS",
+    ],
     default: null,
   },
   createdItemId: {

@@ -22,13 +22,91 @@ const {
   formatContextForAI,
 } = require("./services/dataFetcher");
 const { parseDate } = require("./services/dateParser");
-const { autoCreateDependencies } = require("./services/autoCreateService.js");
+const {
+  autoCreateDependencies,
+  updateDependencies,
+  getTaskWithDependencies,
+} = require("./services/autoCreateService.js");
 
 // ... (keep all your existing GET and POST endpoints for tasks, notes, reminders)
 
 // Replace your existing /api/chat POST endpoint with this updated version:
 
 // Replace the chat endpoint in your server.js with this corrected version:
+
+// Delete task
+app.delete("/api/tasks/:id", async (req, res) => {
+  try {
+    await Task.findByIdAndDelete(req.params.id);
+    res.json({ message: "Task deleted" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update task status
+app.put("/api/tasks/:id", async (req, res) => {
+  try {
+    const task = await Task.findByIdAndUpdate(req.params.id, req.body, {
+      new: true,
+    });
+    res.json(task);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete note
+app.delete("/api/notes/:id", async (req, res) => {
+  try {
+    await Note.findByIdAndDelete(req.params.id);
+    res.json({ message: "Note deleted" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete reminder
+app.delete("/api/reminders/:id", async (req, res) => {
+  try {
+    await Reminder.findByIdAndDelete(req.params.id);
+    res.json({ message: "Reminder deleted" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+app.get("/api/tasks", async (req, res) => {
+  const { priority, limit } = req.query;
+  let query = {};
+  if (priority) {
+    query.priority = priority;
+  }
+  let tasks = Task.find(query).sort({ dueDate: 1 });
+  if (limit) {
+    tasks = tasks.limit(parseInt(limit));
+  }
+  res.json(await tasks);
+});
+
+app.get("/api/notes", async (req, res) => {
+  const { title } = req.query;
+  let query = {};
+  if (title) {
+    query.title = title;
+  }
+  let notes = Note.find(query);
+  res.json(await notes);
+});
+
+app.get("/api/reminders", async (req, res) => {
+  const { title } = req.query;
+  let query = {};
+  if (title) {
+    query.title = title;
+  }
+  let reminders = Reminder.find(query);
+  res.json(await reminders);
+});
 
 app.post("/api/chat", async (req, res) => {
   const { message, sessionId } = req.body;
@@ -111,6 +189,122 @@ app.post("/api/chat", async (req, res) => {
             (reply ? reply.replace(/ACTION: CREATE_TASK[^\n]*\n?/, "") : "");
           break;
 
+        // In your /api/chat endpoint, add this case inside the switch statement
+
+        case "UPDATE_TASK":
+          console.log(`📝 Updating task: "${action.searchQuery}"`);
+          console.log(`  Field to update: ${action.field}`);
+          console.log(`  New value: ${action.newValue}`);
+
+          // Find the task (case-insensitive search)
+          const taskToUpdate = await Task.findOne({
+            title: { $regex: new RegExp(`^${action.searchQuery}$`, "i") },
+          });
+
+          if (!taskToUpdate) {
+            finalReply = `❌ Could not find a task titled "${action.searchQuery}". Please check the name and try again.`;
+            break;
+          }
+
+          console.log(
+            `  ✅ Found task: ${taskToUpdate.title} (ID: ${taskToUpdate._id})`,
+          );
+
+          // Track what's being updated for dependency sync
+          const updates = {};
+          let oldTitle = taskToUpdate.title;
+
+          // Apply the update based on field
+          switch (action.field) {
+            case "dueDate":
+              const newDueDate = await parseDate(action.newValue);
+              if (newDueDate) {
+                // Set to 9 AM
+                newDueDate.setHours(9, 0, 0, 0);
+                taskToUpdate.dueDate = newDueDate;
+                updates.dueDate = true;
+                console.log(`  ✅ Due date updated to: ${newDueDate}`);
+              } else {
+                console.log(`  ❌ Failed to parse date: ${action.newValue}`);
+              }
+              break;
+
+            case "priority":
+              if (
+                ["low", "medium", "high", "important"].includes(
+                  action.newValue.toLowerCase(),
+                )
+              ) {
+                taskToUpdate.priority = action.newValue.toLowerCase();
+                updates.priority = true;
+                console.log(`  ✅ Priority updated to: ${action.newValue}`);
+              } else {
+                console.log(`  ❌ Invalid priority value: ${action.newValue}`);
+              }
+              break;
+
+            case "title":
+              taskToUpdate.title = action.newValue;
+              updates.title = true;
+              console.log(
+                `  ✅ Title updated from "${oldTitle}" to "${action.newValue}"`,
+              );
+              break;
+
+            case "completed":
+              const isCompleted =
+                action.newValue === "true" ||
+                action.newValue === "completed" ||
+                action.newValue === "done";
+              taskToUpdate.completed = isCompleted;
+              updates.completed = true;
+              console.log(`  ✅ Completed status updated to: ${isCompleted}`);
+              break;
+
+            default:
+              console.log(`  ❌ Unknown field to update: ${action.field}`);
+              finalReply = `❌ I don't know how to update the field "${action.field}".`;
+              break;
+          }
+
+          // Save the updated task
+          await taskToUpdate.save();
+
+          // Update dependencies (reminder and note)
+          if (Object.keys(updates).length > 0) {
+            await updateDependencies(taskToUpdate, updates);
+          }
+
+          // Get updated dependencies for response
+          const updatedDeps = await getTaskWithDependencies(taskToUpdate._id);
+
+          // Prepare success message
+          let updateMessage = `✅ Task "${action.searchQuery}" has been updated!\n\n`;
+
+          if (updates.dueDate && updatedDeps.reminder) {
+            updateMessage += `⏰ Reminder updated to: ${updatedDeps.reminder.remindAt.toLocaleString()}\n`;
+          }
+
+          if (updates.title && updatedDeps.note) {
+            updateMessage += `📝 Note title updated to: "${updatedDeps.note.title}"\n`;
+          }
+
+          if (updates.priority) {
+            updateMessage += `⭐ Priority changed to: ${taskToUpdate.priority}\n`;
+          }
+
+          if (updates.completed) {
+            updateMessage += taskToUpdate.completed
+              ? `🎉 Task marked as completed!\n`
+              : `📋 Task marked as pending.\n`;
+          }
+
+          createdItem = taskToUpdate;
+          actionResult = taskToUpdate;
+          finalReply =
+            updateMessage +
+            (reply ? reply.replace(/ACTION: UPDATE_TASK[^\n]*\n?/, "") : "");
+          break;
         case "CREATE_NOTE":
           const newNote = new Note({
             title: action.title || "Untitled",
