@@ -17,7 +17,58 @@ CRITICAL RULES:
 - If user says "create", "add", "new" → USE CREATE_TASK
 - NEVER create a new task when user wants to update an existing one
 
+===========================================
+TABLE FORMATTING RULES (COLUMN-WISE):
+===========================================
+
+When user asks for "tabular form", "as a table", "table format", or "table":
+
+FOR SINGLE TASK (with all details + linked reminder + linked note):
+| Task Title | Priority | Due Date | Status | Reminder  | Note Title | 
+|------------|----------|----------|--------|----------|--------------|
+| Buy groceries | High | 2026-05-20 | Pending | Buy groceries reminder | Buy groceries note | 
+
+FOR SINGLE REMINDER (with linked task details):
+| Reminder Title | Reminder Time | Linked Task | Task Priority | Task Due Date |
+|----------------|---------------|-------------|---------------|---------------|
+| Call mom | 2026-05-20 09:00 AM | Call mom | High | 2026-05-25 |
+
+FOR SINGLE NOTE (with linked task details):
+| Note Title | Note Content | Linked Task | Task Priority | Task Due Date |
+|------------|--------------|-------------|---------------|---------------|
+| Meeting notes | Discuss budget | Client meeting | High | 2026-05-22 |
+
+FOR MULTIPLE TASKS:
+| Task Title | Priority | Due Date | Status | Reminder Time | Note Preview |
+|------------|----------|----------|--------|---------------|--------------|
+| Task 1 | High | 2026-05-20 | Pending | 2026-05-20 09:00 AM | Notes... |
+| Task 2 | Medium | No date | Completed | No reminder | No notes |
+
+FOR MULTIPLE REMINDERS:
+| Reminder Title | Reminder Time | Linked Task | Task Status |
+|----------------|---------------|-------------|--------------|
+| Reminder 1 | 2026-05-20 09:00 AM | Task 1 | Pending |
+| Reminder 2 | 2026-05-25 02:00 PM | Task 2 | Completed |
+
+FOR MULTIPLE NOTES:
+| Note Title | Note Preview | Linked Task | Task Priority |
+|------------|--------------|-------------|---------------|
+| Note 1 | Content preview... | Task 1 | High |
+| Note 2 | Content preview... | Task 2 | Medium |
+
+===========================================
+CRITICAL RULES FOR TABLES:
+===========================================
+1. When user asks for a TASK → Show Task details + its linked Reminder + its linked Note (all in ONE row)
+2. When user asks for a REMINDER → Show Reminder details + its linked Task details (NO extra information)
+3. When user asks for a NOTE → Show Note details + its linked Task details (NO extra information)
+4. Use column headers as the field names
+5. Put values directly below each column
+6. NO "Field | Value" pairs - only column-wise tables
+===========================================
 ACTION FORMATS:
+===========================================
+
 
 CREATE_TASK (only for new tasks):
 ACTION: CREATE_TASK|title|priority|dueDate
@@ -192,6 +243,23 @@ User: "Remind me to water plants at 6pm today"
 ACTION: CREATE_REMINDER|water plants|2026-05-11T18:00:00
 ✅ Reminder set!
 
+
+When user asks about related items, respond with:
+
+For task queries:
+"show me everything related to [task name]"
+Response: Here's the complete information for task "[task name]":
+- Task: [title] (Priority: X, Due: Y)
+- Reminder: [reminder title] at [time]
+- Note: [note title] - [preview of content]
+
+For reminder queries:
+"what task is this reminder for?"
+Response: This reminder "[reminder name]" is for task "[task name]" which has priority [priority].
+
+For note queries:
+"show me the task for this note"
+Response: This note belongs to task "[task name]" which is due on [date].
 ========================
 FINAL INSTRUCTION
 ========================
@@ -249,7 +317,34 @@ Respond now.
 }
 
 // Helper function to extract actions from AI response
+// Helper function to extract actions from AI response
 function extractAction(response) {
+  // Check for UPDATE_TASK action (MUST BE FIRST to avoid being caught by CREATE patterns)
+  if (response.includes("ACTION: UPDATE_TASK")) {
+    const match = response.match(
+      /ACTION: UPDATE_TASK\|([^|]+)\|([^|]+)\|(.+?)(?:\n|$)/,
+    );
+    if (match) {
+      return {
+        type: "UPDATE_TASK",
+        searchQuery: match[1].trim(),
+        field: match[2].trim(),
+        newValue: match[3].trim(),
+      };
+    }
+  }
+
+  // Check for DELETE_TASK action
+  if (response.includes("ACTION: DELETE_TASK")) {
+    const match = response.match(/ACTION: DELETE_TASK\|([^|]+)/);
+    if (match) {
+      return {
+        type: "DELETE_TASK",
+        searchQuery: match[1].trim(),
+      };
+    }
+  }
+
   // Check for CREATE_TASK action
   if (response.includes("ACTION: CREATE_TASK")) {
     const match = response.match(
@@ -301,36 +396,8 @@ function extractAction(response) {
     }
   }
 
-  // In extractAction() function, add this section:
-
-  // Check for UPDATE_TASK action
-  if (response.includes("ACTION: UPDATE_TASK")) {
-    const match = response.match(
-      /ACTION: UPDATE_TASK\|([^|]+)\|([^|]+)\|(.+?)(?:\n|$)/,
-    );
-    if (match) {
-      return {
-        type: "UPDATE_TASK",
-        searchQuery: match[1].trim(),
-        field: match[2].trim(),
-        newValue: match[3].trim(),
-      };
-    }
-  }
-
-  // Check for DELETE_TASK action
-  if (response.includes("ACTION: DELETE_TASK")) {
-    const match = response.match(/ACTION: DELETE_TASK\|([^|]+)/);
-    if (match) {
-      return {
-        type: "DELETE_TASK",
-        searchQuery: match[1].trim(),
-      };
-    }
-  }
   return null;
 }
-
 // Function to clear conversation history
 function clearConversation(sessionId) {
   conversationHistory.delete(sessionId);

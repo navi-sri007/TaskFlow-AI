@@ -16,29 +16,33 @@ const Task = require("./models/Task.js");
 const Note = require("./models/Note.js");
 const Reminder = require("./models/Reminder.js");
 const Chat = require("./models/Chat.js");
-const { getAIResponse, parseNaturalDate } = require("./services/groqService");
+const { getAIResponse } = require("./services/groqService");
 const {
   fetchRelevantData,
   formatContextForAI,
 } = require("./services/dataFetcher");
 const { parseDate } = require("./services/dateParser");
+// In server.js, update this import:
 const {
   autoCreateDependencies,
   updateDependencies,
+  deleteDependencies,
   getTaskWithDependencies,
+  getReminderWithDependenciesById,
+  getNoteWithDependenciesById,
+  searchAllByKeyword,
 } = require("./services/autoCreateService.js");
 
-// ... (keep all your existing GET and POST endpoints for tasks, notes, reminders)
+// Get note with its task and reminder using note._id
 
-// Replace your existing /api/chat POST endpoint with this updated version:
-
-// Replace the chat endpoint in your server.js with this corrected version:
+// Search by keyword using ID-based lookup
 
 // Delete task
 app.delete("/api/tasks/:id", async (req, res) => {
   try {
+    await deleteDependencies(req.params.id);
     await Task.findByIdAndDelete(req.params.id);
-    res.json({ message: "Task deleted" });
+    res.json({ message: "Task and its dependencies deleted" });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -65,6 +69,11 @@ app.delete("/api/notes/:id", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+app.get("/api/search/:keyword", async (req, res) => {
+  const result = await searchAllByKeyword(req.params.keyword);
+  if (!result) return res.json({ message: "No results found" });
+  res.json(result);
+});
 
 // Delete reminder
 app.delete("/api/reminders/:id", async (req, res) => {
@@ -76,38 +85,111 @@ app.delete("/api/reminders/:id", async (req, res) => {
   }
 });
 app.get("/api/tasks", async (req, res) => {
-  const { priority, limit } = req.query;
-  let query = {};
-  if (priority) {
-    query.priority = priority;
+  try {
+    const { priority, limit } = req.query;
+    let query = {};
+    if (priority) query.priority = priority;
+
+    let tasks = Task.find(query).sort({ dueDate: 1 });
+    if (limit) tasks = tasks.limit(parseInt(limit));
+
+    res.json(await tasks);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
-  let tasks = Task.find(query).sort({ dueDate: 1 });
-  if (limit) {
-    tasks = tasks.limit(parseInt(limit));
-  }
-  res.json(await tasks);
 });
 
+app.get("/api/task/:id", async (req, res) => {
+  const result = await getTaskWithDependencies(req.params.id);
+  if (!result) return res.status(404).json({ error: "Task not found" });
+  res.json(result);
+});
+// Get task with its reminder and note by task name
+app.get("/api/task/by-name/:title", async (req, res) => {
+  const task = await Task.findOne({
+    title: { $regex: new RegExp(`^${req.params.title}$`, "i") },
+  });
+  if (!task) return res.status(404).json({ error: "Task not found" });
+
+  const result = await getTaskWithDependencies(task._id);
+  console.log("Result:", result);
+  res.json(result);
+});
+app.get("/api/reminder/:id", async (req, res) => {
+  const result = await getReminderWithDependenciesById(req.params.id);
+  if (!result) return res.status(404).json({ error: "Reminder not found" });
+  res.json(result);
+});
+
+// Get reminder by name
+app.get("/api/reminder/by-name/:title", async (req, res) => {
+  const reminder = await Reminder.findOne({
+    title: { $regex: new RegExp(req.params.title, "i") },
+  });
+  if (!reminder) return res.status(404).json({ error: "Reminder not found" });
+
+  const result = await getReminderWithDependenciesById(reminder._id);
+  res.json(result);
+});
+
+// Get note with its task and reminder by note name
+app.get("/api/note/by-name/:title", async (req, res) => {
+  const note = await Note.findOne({
+    title: { $regex: new RegExp(req.params.title, "i") },
+  });
+  if (!note) return res.status(404).json({ error: "Note not found" });
+
+  const result = await getNoteWithDependenciesById(note._id);
+  res.json(result);
+});
+app.get("/api/note/:id", async (req, res) => {
+  const result = await getNoteWithDependenciesById(req.params.id);
+  if (!result) return res.status(404).json({ error: "Note not found" });
+  res.json(result);
+});
+
+// Search all by keyword
+app.get("/api/search/:keyword", async (req, res) => {
+  const result = await searchAllByKeyword(req.params.keyword);
+  res.json(result);
+});
 app.get("/api/notes", async (req, res) => {
-  const { title } = req.query;
-  let query = {};
-  if (title) {
-    query.title = title;
+  try {
+    const notes = await Note.find();
+    res.json(notes);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
-  let notes = Note.find(query);
-  res.json(await notes);
 });
 
 app.get("/api/reminders", async (req, res) => {
-  const { title } = req.query;
-  let query = {};
-  if (title) {
-    query.title = title;
+  try {
+    const reminders = await Reminder.find();
+    res.json(reminders);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
-  let reminders = Reminder.find(query);
-  res.json(await reminders);
 });
-
+app.post("/api/tasks", async (req, res) => {
+  try {
+    const task = new Task(req.body);
+    const savedTask = await task.save();
+    const result = await autoCreateDependencies(savedTask);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+app.put("/api/tasks/:id", async (req, res) => {
+  try {
+    const task = await Task.findByIdAndUpdate(req.params.id, req.body, {
+      new: true,
+    });
+    res.json(task);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 app.post("/api/chat", async (req, res) => {
   const { message, sessionId } = req.body;
 

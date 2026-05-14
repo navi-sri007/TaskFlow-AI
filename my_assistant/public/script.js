@@ -198,7 +198,25 @@ async function sendMessage() {
   // Add user message to chat
   addMessageToChat("user", message);
   input.value = "";
-
+  const lowerMsg = message.toLowerCase();
+  if (
+    lowerMsg.includes("related to") ||
+    lowerMsg.includes("everything about") ||
+    (lowerMsg.includes("show me") &&
+      lowerMsg.includes("task") &&
+      lowerMsg.includes("reminder"))
+  ) {
+    // Extract keyword
+    const match = message.match(
+      /(?:related to|everything about|show me.*?["']?)(\w+)/i,
+    );
+    if (match) {
+      const keyword = match[1];
+      const relatedInfo = await searchRelated(keyword);
+      addMessageToChat("bot", relatedInfo);
+      return;
+    }
+  }
   try {
     const response = await fetch("/api/chat", {
       method: "POST",
@@ -272,6 +290,45 @@ async function sendMessage() {
     console.error("Chat error:", error);
     removeTypingIndicator();
     addMessageToChat("bot", "Sorry, something went wrong. Please try again.");
+  }
+}
+async function searchRelated(keyword) {
+  try {
+    const response = await fetch(`/api/search/${encodeURIComponent(keyword)}`);
+    const data = await response.json();
+
+    if (!data || !data.task) {
+      return `No related items found for "${keyword}"`;
+    }
+
+    let message = `📋 **Complete Information for "${keyword}"**\n\n`;
+
+    // Task details
+    message += `**Task:** ${data.task.title}\n`;
+    message += `📌 Priority: ${data.task.priority}\n`;
+    message += `📅 Due: ${data.task.dueDate ? new Date(data.task.dueDate).toLocaleDateString() : "No due date"}\n`;
+    message += `✅ Status: ${data.task.completed ? "Completed" : "Pending"}\n\n`;
+
+    // Reminder details
+    if (data.reminder) {
+      message += `**⏰ Reminder:** ${data.reminder.title}\n`;
+      message += `   At: ${new Date(data.reminder.remindAt).toLocaleString()}\n\n`;
+    } else {
+      message += `**⏰ Reminder:** Not set\n\n`;
+    }
+
+    // Note details
+    if (data.note) {
+      message += `**📝 Note:** ${data.note.title}\n`;
+      message += `   Content: ${data.note.content.substring(0, 150)}${data.note.content.length > 150 ? "..." : ""}\n`;
+    } else {
+      message += `**📝 Note:** Not created\n`;
+    }
+
+    return message;
+  } catch (error) {
+    console.error("Error:", error);
+    return `Error fetching related items for "${keyword}"`;
   }
 }
 

@@ -5,67 +5,81 @@ const Reminder = require("../models/Reminder");
 
 async function fetchRelevantData(userMessage) {
   const message = userMessage.toLowerCase();
-  let context = {
-    tasks: [],
-    notes: [],
-    reminders: [],
-  };
+  let context = { tasks: [], notes: [], reminders: [] };
 
-  // Fetch tasks if relevant
+  // ALL possible patterns to extract task name
+  let taskName = null;
+
+  const patterns = [
+    // "show me everything related to X"
+    /everything related to\s+['"]?([^'"]+?)['"]?$/i,
+    // "show the notes and reminders associated with task X"
+    /associated with task\s+['"]?([^'"]+?)['"]?/i,
+    // "task X"
+    /task\s+['"]?([^'"]+?)['"]?(?:\s|$|\.)/i,
+    // "related to X"
+    /related to\s+['"]?([^'"]+?)['"]?$/i,
+    // quoted text
+    /['"]([^'"]+)['"]/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = message.match(pattern);
+    if (match) {
+      taskName = match[1];
+      break;
+    }
+  }
+
+  // Remove words like "and", "also", "for the task" from the extracted name
+  if (taskName) {
+    taskName = taskName
+      .replace(/\s+(and|also|for the task|list).*$/i, "")
+      .trim();
+  }
+
+  console.log("🎯 Extracted task name:", taskName);
+
+  if (
+    taskName &&
+    !message.includes("list all") &&
+    !message.includes("all tasks")
+  ) {
+    const task = await Task.findOne({
+      title: { $regex: new RegExp(`^${taskName}$`, "i") },
+    });
+
+    if (task) {
+      context.tasks = [task];
+
+      if (task.reminderId) {
+        const reminder = await Reminder.findById(task.reminderId);
+        if (reminder) context.reminders = [reminder];
+      }
+
+      if (task.noteId) {
+        const note = await Note.findById(task.noteId);
+        if (note) context.notes = [note];
+      }
+
+      return context;
+    }
+  }
+  // If not asking about a specific task, fetch all (limited)
   if (
     message.includes("task") ||
     message.includes("todo") ||
-    message.includes("assignment") ||
     message.includes("list")
   ) {
-    let query = {};
-
-    // Parse dates
-    if (message.includes("today")) {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      query.dueDate = { $gte: today, $lt: tomorrow };
-    } else if (message.includes("tomorrow")) {
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      tomorrow.setHours(0, 0, 0, 0);
-      const dayAfter = new Date(tomorrow);
-      dayAfter.setDate(dayAfter.getDate() + 1);
-      query.dueDate = { $gte: tomorrow, $lt: dayAfter };
-    } else if (message.includes("may")) {
-      // Extract May date
-      const match = message.match(/may (\d+)/i);
-      if (match) {
-        const date = new Date(2026, 4, parseInt(match[1])); // May = month 4
-        date.setHours(0, 0, 0, 0);
-        const nextDay = new Date(date);
-        nextDay.setDate(nextDay.getDate() + 1);
-        query.dueDate = { $gte: date, $lt: nextDay };
-      }
-    }
-
-    // Priority filter
-    if (message.includes("important") || message.includes("urgent")) {
-      query.priority = "important";
-    } else if (message.includes("high")) {
-      query.priority = "high";
-    }
-
-    context.tasks = await Task.find(query).sort({ dueDate: 1 }).limit(10);
+    context.tasks = await Task.find().sort({ dueDate: 1 });
   }
 
-  // Fetch reminders if relevant
   if (message.includes("reminder") || message.includes("remind")) {
-    context.reminders = await Reminder.find({ remindAt: { $gte: new Date() } })
-      .sort({ remindAt: 1 })
-      .limit(5);
+    context.reminders = await Reminder.find().sort({ remindAt: 1 });
   }
 
-  // Fetch notes if relevant
   if (message.includes("note") || message.includes("memo")) {
-    context.notes = await Note.find().sort({ createdAt: -1 }).limit(5);
+    context.notes = await Note.find().sort({ createdAt: -1 });
   }
 
   return context;
@@ -74,14 +88,41 @@ async function fetchRelevantData(userMessage) {
 function formatContextForAI(context) {
   let formatted = "";
 
+  // Specific task view (only 1 task with its linked items)
   if (
-    context.tasks.length === 0 &&
-    context.notes.length === 0 &&
-    context.reminders.length === 0
+    context.tasks.length === 1 &&
+    context.reminders.length <= 1 &&
+    context.notes.length <= 1
   ) {
-    return "NO DATA FOUND - Tell user no matching records exist.";
+    const task = context.tasks[0];
+    formatted += `TASK: "${task.title}"\n`;
+    formatted += `- Priority: ${task.priority}\n`;
+    formatted += `- Due Date: ${task.dueDate ? new Date(task.dueDate).toDateString() : "No due date"}\n`;
+    formatted += `- Status: ${task.completed ? "Completed" : "Pending"}\n\n`;
+
+    if (context.reminders.length > 0) {
+      formatted += `LINKED REMINDER:\n`;
+      context.reminders.forEach((r) => {
+        formatted += `- "${r.title}" at ${new Date(r.remindAt).toLocaleString()}\n`;
+      });
+    } else {
+      formatted += `LINKED REMINDER: None\n`;
+    }
+    formatted += `\n`;
+
+    if (context.notes.length > 0) {
+      formatted += `LINKED NOTE:\n`;
+      context.notes.forEach((n) => {
+        formatted += `- "${n.title}": ${n.content?.substring(0, 100)}${n.content?.length > 100 ? "..." : ""}\n`;
+      });
+    } else {
+      formatted += `LINKED NOTE: None\n`;
+    }
+
+    return formatted;
   }
 
+  // Multiple items view (existing logic)
   if (context.tasks.length > 0) {
     formatted += "TASKS:\n";
     context.tasks.forEach((task, i) => {
@@ -111,8 +152,8 @@ function formatContextForAI(context) {
       formatted += `${i + 1}. "${note.title}": ${note.content?.substring(0, 80)}...\n`;
     });
   }
-
-  return formatted;
+  console.log("Context being sent:", JSON.stringify(context, null, 2));
+  return formatted || "NO DATA FOUND - Tell user no matching records exist.";
 }
 
 module.exports = { fetchRelevantData, formatContextForAI };
