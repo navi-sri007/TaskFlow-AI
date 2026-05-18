@@ -1,5 +1,4 @@
-// server.js (updated sections)
-
+// server.js
 require("dotenv").config();
 const mongoose = require("mongoose");
 const express = require("express");
@@ -20,9 +19,9 @@ const { getAIResponse } = require("./services/groqService");
 const {
   fetchRelevantData,
   formatContextForAI,
+  setLastMentionedTask,
 } = require("./services/dataFetcher");
 const { parseDate } = require("./services/dateParser");
-// In server.js, update this import:
 const {
   autoCreateDependencies,
   updateDependencies,
@@ -32,10 +31,9 @@ const {
   getNoteWithDependenciesById,
   searchAllByKeyword,
 } = require("./services/autoCreateService.js");
+const { formatISTDate } = require("./utils/dateFormatter.js");
 
-// Get note with its task and reminder using note._id
-
-// Search by keyword using ID-based lookup
+// ============ API ENDPOINTS ============
 
 // Delete task
 app.delete("/api/tasks/:id", async (req, res) => {
@@ -69,6 +67,8 @@ app.delete("/api/notes/:id", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// Search by keyword
 app.get("/api/search/:keyword", async (req, res) => {
   const result = await searchAllByKeyword(req.params.keyword);
   if (!result) return res.json({ message: "No results found" });
@@ -84,6 +84,8 @@ app.delete("/api/reminders/:id", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// Get all tasks
 app.get("/api/tasks", async (req, res) => {
   try {
     const { priority, limit } = req.query;
@@ -99,12 +101,14 @@ app.get("/api/tasks", async (req, res) => {
   }
 });
 
+// Get task by ID with dependencies
 app.get("/api/task/:id", async (req, res) => {
   const result = await getTaskWithDependencies(req.params.id);
   if (!result) return res.status(404).json({ error: "Task not found" });
   res.json(result);
 });
-// Get task with its reminder and note by task name
+
+// Get task by name
 app.get("/api/task/by-name/:title", async (req, res) => {
   const task = await Task.findOne({
     title: { $regex: new RegExp(`^${req.params.title}$`, "i") },
@@ -115,6 +119,8 @@ app.get("/api/task/by-name/:title", async (req, res) => {
   console.log("Result:", result);
   res.json(result);
 });
+
+// Get reminder by ID
 app.get("/api/reminder/:id", async (req, res) => {
   const result = await getReminderWithDependenciesById(req.params.id);
   if (!result) return res.status(404).json({ error: "Reminder not found" });
@@ -132,7 +138,7 @@ app.get("/api/reminder/by-name/:title", async (req, res) => {
   res.json(result);
 });
 
-// Get note with its task and reminder by note name
+// Get note by name
 app.get("/api/note/by-name/:title", async (req, res) => {
   const note = await Note.findOne({
     title: { $regex: new RegExp(req.params.title, "i") },
@@ -142,17 +148,15 @@ app.get("/api/note/by-name/:title", async (req, res) => {
   const result = await getNoteWithDependenciesById(note._id);
   res.json(result);
 });
+
+// Get note by ID
 app.get("/api/note/:id", async (req, res) => {
   const result = await getNoteWithDependenciesById(req.params.id);
   if (!result) return res.status(404).json({ error: "Note not found" });
   res.json(result);
 });
 
-// Search all by keyword
-app.get("/api/search/:keyword", async (req, res) => {
-  const result = await searchAllByKeyword(req.params.keyword);
-  res.json(result);
-});
+// Get all notes
 app.get("/api/notes", async (req, res) => {
   try {
     const notes = await Note.find();
@@ -162,6 +166,7 @@ app.get("/api/notes", async (req, res) => {
   }
 });
 
+// Get all reminders
 app.get("/api/reminders", async (req, res) => {
   try {
     const reminders = await Reminder.find();
@@ -170,6 +175,8 @@ app.get("/api/reminders", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// Create task
 app.post("/api/tasks", async (req, res) => {
   try {
     const task = new Task(req.body);
@@ -180,6 +187,8 @@ app.post("/api/tasks", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// Update task
 app.put("/api/tasks/:id", async (req, res) => {
   try {
     const task = await Task.findByIdAndUpdate(req.params.id, req.body, {
@@ -190,6 +199,9 @@ app.put("/api/tasks/:id", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// ============ CHAT ENDPOINT ============
+
 app.post("/api/chat", async (req, res) => {
   const { message, sessionId } = req.body;
 
@@ -219,14 +231,21 @@ app.post("/api/chat", async (req, res) => {
         case "CREATE_TASK":
           console.log(`📝 Creating task: "${action.title}"`);
 
-          // Parse due date if provided
           let dueDate = null;
+          let originalDueDateString = action.dueDate || "";
+          let hasExplicitTime = false;
+
           if (action.dueDate) {
             dueDate = await parseDate(action.dueDate);
             console.log(`  Parsed due date: ${dueDate}`);
+
+            hasExplicitTime =
+              /(?:\d{1,2}:\d{2}\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm))/i.test(
+                originalDueDateString,
+              );
+            console.log(`  Has explicit time: ${hasExplicitTime}`);
           }
 
-          // Create the task
           const task = new Task({
             title: action.title,
             priority: ["low", "medium", "high", "important"].includes(
@@ -238,22 +257,21 @@ app.post("/api/chat", async (req, res) => {
             completed: false,
           });
 
-          // Save the task
           const savedTask = await task.save();
           console.log(`  ✅ Task saved with ID: ${savedTask._id}`);
 
-          // AUTO-CREATE REMINDER AND NOTE
           const {
             reminder: autoReminder,
             note: autoNote,
             error: autoError,
-          } = await autoCreateDependencies(savedTask);
+          } = await autoCreateDependencies(savedTask, hasExplicitTime);
 
-          // Prepare response message
-          let successMessage = `✅ Task "${action.title}" has been created with ${action.priority || "medium"} priority!\n\n`;
+          let successMessage = `✅ Task "${action.title}" has been created with ${
+            action.priority || "medium"
+          } priority!\n\n`;
 
-          if (autoReminder) {
-            successMessage += `⏰ Reminder set for: ${new Date(autoReminder.remindAt).toLocaleString()}\n`;
+          if (autoReminder && originalDueDateString) {
+            successMessage += `⏰ Reminder set for: ${originalDueDateString}\n`;
           }
 
           if (autoNote) {
@@ -266,51 +284,119 @@ app.post("/api/chat", async (req, res) => {
 
           createdItem = savedTask;
           actionResult = savedTask;
-          finalReply =
-            successMessage +
-            (reply ? reply.replace(/ACTION: CREATE_TASK[^\n]*\n?/, "") : "");
+          finalReply = successMessage;
+          setLastMentionedTask(savedTask.title, savedTask._id);
           break;
-
-        // In your /api/chat endpoint, add this case inside the switch statement
 
         case "UPDATE_TASK":
           console.log(`📝 Updating task: "${action.searchQuery}"`);
-          console.log(`  Field to update: ${action.field}`);
-          console.log(`  New value: ${action.newValue}`);
 
-          // Find the task (case-insensitive search)
           const taskToUpdate = await Task.findOne({
             title: { $regex: new RegExp(`^${action.searchQuery}$`, "i") },
           });
 
           if (!taskToUpdate) {
-            finalReply = `❌ Could not find a task titled "${action.searchQuery}". Please check the name and try again.`;
+            finalReply = `❌ Could not find a task titled "${action.searchQuery}".`;
             break;
           }
 
-          console.log(
-            `  ✅ Found task: ${taskToUpdate.title} (ID: ${taskToUpdate._id})`,
-          );
+          setLastMentionedTask(taskToUpdate.title, taskToUpdate._id);
 
-          // Track what's being updated for dependency sync
           const updates = {};
           let oldTitle = taskToUpdate.title;
 
-          // Apply the update based on field
           switch (action.field) {
+            // =========================================
+            // UPDATE DUE DATE / TIME
+            // =========================================
             case "dueDate":
-              const newDueDate = await parseDate(action.newValue);
-              if (newDueDate) {
-                // Set to 9 AM
-                newDueDate.setHours(9, 0, 0, 0);
-                taskToUpdate.dueDate = newDueDate;
-                updates.dueDate = true;
-                console.log(`  ✅ Due date updated to: ${newDueDate}`);
+              let newDueDate = null;
+
+              const oldDueDate = taskToUpdate.dueDate
+                ? new Date(taskToUpdate.dueDate)
+                : null;
+
+              const isOnlyTime =
+                /^\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*$/i.test(
+                  action.newValue,
+                );
+
+              if (isOnlyTime && taskToUpdate.dueDate) {
+                newDueDate = new Date(taskToUpdate.dueDate);
+
+                const parsedTime = await parseDate(action.newValue);
+
+                if (parsedTime) {
+                  newDueDate.setHours(
+                    parsedTime.getHours(),
+                    parsedTime.getMinutes(),
+                    0,
+                    0,
+                  );
+                } else {
+                  finalReply = `❌ Failed to parse time: ${action.newValue}`;
+                  break;
+                }
+
+                console.log(
+                  `  ⏰ Keeping original date (${newDueDate.toDateString()}), updating time only`,
+                );
               } else {
-                console.log(`  ❌ Failed to parse date: ${action.newValue}`);
+                newDueDate = await parseDate(action.newValue);
               }
+
+              if (newDueDate) {
+                // ====================================
+                // DETECT WHAT CHANGED
+                // ====================================
+                let changeType = "date and time";
+
+                if (oldDueDate) {
+                  const oldDatePart = oldDueDate.toDateString();
+                  const newDatePart = newDueDate.toDateString();
+
+                  const oldTimePart = `${oldDueDate.getHours()}:${oldDueDate.getMinutes()}`;
+
+                  const newTimePart = `${newDueDate.getHours()}:${newDueDate.getMinutes()}`;
+
+                  const dateChanged = oldDatePart !== newDatePart;
+                  const timeChanged = oldTimePart !== newTimePart;
+
+                  if (dateChanged && !timeChanged) {
+                    changeType = "date";
+                  } else if (!dateChanged && timeChanged) {
+                    changeType = "time";
+                  }
+                }
+
+                taskToUpdate.dueDate = newDueDate;
+
+                updates.dueDate = true;
+                updates.changeType = changeType;
+
+                await taskToUpdate.save();
+
+                // ====================================
+                // UPDATE DEPENDENCIES
+                // ====================================
+                await updateDependencies(taskToUpdate, updates, {
+                  oldDueDate,
+                });
+
+                finalReply = `✅ Task "${action.searchQuery}" ${changeType} updated to ${newDueDate.toLocaleString()}`;
+
+                if (taskToUpdate.reminderId) {
+                  finalReply += `\n⏰ Linked reminder updated automatically.`;
+                }
+              } else {
+                finalReply = `❌ Failed to parse date: ${action.newValue}`;
+              }
+
               break;
 
+            // =========================================
+            // UPDATE PRIORITY
+            // =========================================
             case "priority":
               if (
                 ["low", "medium", "high", "important"].includes(
@@ -318,75 +404,221 @@ app.post("/api/chat", async (req, res) => {
                 )
               ) {
                 taskToUpdate.priority = action.newValue.toLowerCase();
+
                 updates.priority = true;
+
+                await taskToUpdate.save();
+
+                finalReply = `✅ Priority updated to: ${action.newValue}`;
+
                 console.log(`  ✅ Priority updated to: ${action.newValue}`);
               } else {
-                console.log(`  ❌ Invalid priority value: ${action.newValue}`);
+                finalReply = `❌ Invalid priority value: ${action.newValue}`;
               }
+
               break;
 
+            // =========================================
+            // UPDATE TITLE
+            // =========================================
             case "title":
               taskToUpdate.title = action.newValue;
+
               updates.title = true;
+
+              await taskToUpdate.save();
+
+              // Update reminder + note titles
+              await updateDependencies(taskToUpdate, updates);
+
+              finalReply =
+                `✅ Title updated from "${oldTitle}" to "${action.newValue}"` +
+                `\n📝 Linked reminder and note titles updated automatically.`;
+
               console.log(
                 `  ✅ Title updated from "${oldTitle}" to "${action.newValue}"`,
               );
+
               break;
 
+            // =========================================
+            // UPDATE COMPLETED STATUS
+            // =========================================
             case "completed":
               const isCompleted =
                 action.newValue === "true" ||
                 action.newValue === "completed" ||
                 action.newValue === "done";
+
               taskToUpdate.completed = isCompleted;
+
               updates.completed = true;
+
+              await taskToUpdate.save();
+
+              finalReply = isCompleted
+                ? `🎉 Task marked as completed!`
+                : `📋 Task marked as pending.`;
+
               console.log(`  ✅ Completed status updated to: ${isCompleted}`);
+
               break;
 
+            // =========================================
+            // UNKNOWN FIELD
+            // =========================================
             default:
-              console.log(`  ❌ Unknown field to update: ${action.field}`);
               finalReply = `❌ I don't know how to update the field "${action.field}".`;
+
               break;
-          }
-
-          // Save the updated task
-          await taskToUpdate.save();
-
-          // Update dependencies (reminder and note)
-          if (Object.keys(updates).length > 0) {
-            await updateDependencies(taskToUpdate, updates);
-          }
-
-          // Get updated dependencies for response
-          const updatedDeps = await getTaskWithDependencies(taskToUpdate._id);
-
-          // Prepare success message
-          let updateMessage = `✅ Task "${action.searchQuery}" has been updated!\n\n`;
-
-          if (updates.dueDate && updatedDeps.reminder) {
-            updateMessage += `⏰ Reminder updated to: ${updatedDeps.reminder.remindAt.toLocaleString()}\n`;
-          }
-
-          if (updates.title && updatedDeps.note) {
-            updateMessage += `📝 Note title updated to: "${updatedDeps.note.title}"\n`;
-          }
-
-          if (updates.priority) {
-            updateMessage += `⭐ Priority changed to: ${taskToUpdate.priority}\n`;
-          }
-
-          if (updates.completed) {
-            updateMessage += taskToUpdate.completed
-              ? `🎉 Task marked as completed!\n`
-              : `📋 Task marked as pending.\n`;
           }
 
           createdItem = taskToUpdate;
           actionResult = taskToUpdate;
-          finalReply =
-            updateMessage +
-            (reply ? reply.replace(/ACTION: UPDATE_TASK[^\n]*\n?/, "") : "");
+
           break;
+        case "UPDATE_REMINDER":
+          console.log(`⏰ Updating reminder: "${action.searchQuery}"`);
+
+          const reminderToUpdate = await Reminder.findOne({
+            title: { $regex: new RegExp(`^${action.searchQuery}$`, "i") },
+          });
+
+          if (!reminderToUpdate) {
+            finalReply = `❌ Could not find a reminder titled "${action.searchQuery}".`;
+            break;
+          }
+
+          if (action.field === "remindAt") {
+            let newRemindAt = null;
+            const isOnlyTime =
+              /^\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*$/i.test(
+                action.newValue,
+              );
+
+            if (isOnlyTime) {
+              newRemindAt = new Date(reminderToUpdate.remindAt);
+              const parsedTime = await parseDate(action.newValue);
+              if (parsedTime) {
+                newRemindAt.setHours(
+                  parsedTime.getHours(),
+                  parsedTime.getMinutes(),
+                  0,
+                  0,
+                );
+              } else {
+                finalReply = `❌ Failed to parse time: ${action.newValue}`;
+                break;
+              }
+              console.log(
+                `  ⏰ Keeping original date (${newRemindAt.toDateString()}), updating time only`,
+              );
+            } else {
+              newRemindAt = await parseDate(action.newValue);
+            }
+
+            if (newRemindAt) {
+              reminderToUpdate.remindAt = newRemindAt;
+              await reminderToUpdate.save();
+
+              if (reminderToUpdate.taskId) {
+                const linkedTask = await Task.findById(reminderToUpdate.taskId);
+                if (linkedTask) {
+                  linkedTask.dueDate = newRemindAt;
+                  await linkedTask.save();
+                  finalReply = `✅ Reminder "${action.searchQuery}" updated to ${newRemindAt.toLocaleString()}\n📋 Linked task "${linkedTask.title}" due date also updated.`;
+                } else {
+                  finalReply = `✅ Reminder "${action.searchQuery}" updated to ${newRemindAt.toLocaleString()}`;
+                }
+              } else {
+                finalReply = `✅ Reminder "${action.searchQuery}" updated to ${newRemindAt.toLocaleString()}`;
+              }
+            } else {
+              finalReply = `❌ Failed to parse date/time: ${action.newValue}`;
+            }
+          }
+          break;
+
+        case "DELETE_TASK":
+          console.log(
+            `🗑️ DELETE_TASK action received: "${action.searchQuery}"`,
+          );
+
+          let searchTitle = action.searchQuery.replace(/["']/g, "").trim();
+          searchTitle = searchTitle.replace(/[.!?]+$/, "");
+
+          const taskToDelete = await Task.findOne({
+            title: { $regex: new RegExp(`^${searchTitle}$`, "i") },
+          });
+
+          if (!taskToDelete) {
+            finalReply = `❌ Could not find a task titled "${searchTitle}".`;
+            break;
+          }
+
+          await deleteDependencies(taskToDelete._id);
+          await Task.findByIdAndDelete(taskToDelete._id);
+
+          finalReply = `✅ Task "${taskToDelete.title}" and its associated reminder & note have been permanently deleted!`;
+          createdItem = null;
+          actionResult = null;
+          break;
+
+        case "DELETE_REMINDER":
+          console.log(`⏰ Deleting reminder: "${action.searchQuery}"`);
+
+          const reminderToDelete = await Reminder.findOne({
+            title: { $regex: new RegExp(`^${action.searchQuery}$`, "i") },
+          });
+
+          if (!reminderToDelete) {
+            finalReply = `❌ Could not find a reminder titled "${action.searchQuery}".`;
+            break;
+          }
+
+          await Reminder.findByIdAndDelete(reminderToDelete._id);
+          finalReply = `✅ Reminder "${action.searchQuery}" has been deleted.`;
+          break;
+
+        case "UPDATE_NOTE":
+          console.log(`📝 Updating note: "${action.searchQuery}"`);
+
+          const noteToUpdate = await Note.findOne({
+            title: { $regex: new RegExp(`^${action.searchQuery}$`, "i") },
+          });
+
+          if (!noteToUpdate) {
+            finalReply = `❌ Could not find a note titled "${action.searchQuery}".`;
+            break;
+          }
+
+          if (action.field === "title") {
+            noteToUpdate.title = action.newValue;
+            await noteToUpdate.save();
+            finalReply = `✅ Note renamed from "${action.searchQuery}" to "${action.newValue}"`;
+          } else if (action.field === "content") {
+            noteToUpdate.content = action.newValue;
+            await noteToUpdate.save();
+            finalReply = `✅ Note "${action.searchQuery}" content updated.`;
+          }
+          break;
+
+        case "DELETE_NOTE":
+          console.log(`📝 Deleting note: "${action.searchQuery}"`);
+
+          const noteToDelete = await Note.findOne({
+            title: { $regex: new RegExp(`^${action.searchQuery}$`, "i") },
+          });
+
+          if (!noteToDelete) {
+            finalReply = `❌ Could not find a note titled "${action.searchQuery}".`;
+            break;
+          }
+
+          await Note.findByIdAndDelete(noteToDelete._id);
+          finalReply = `✅ Note "${action.searchQuery}" has been deleted.`;
+          break;
+
         case "CREATE_NOTE":
           const newNote = new Note({
             title: action.title || "Untitled",
@@ -395,13 +627,10 @@ app.post("/api/chat", async (req, res) => {
 
           createdItem = await newNote.save();
           actionResult = newNote;
-          finalReply =
-            `✅ Note "${action.title}" has been saved!\n\n` +
-            (reply ? reply.replace(/ACTION: CREATE_NOTE[^\n]*\n?/, "") : "");
+          finalReply = `✅ Note "${action.title}" has been saved!\n\n`;
           break;
 
         case "CREATE_REMINDER":
-          // Use AI-powered date parser
           let remindAt = null;
           if (action.remindAt) {
             remindAt = await parseDate(action.remindAt);
@@ -411,7 +640,6 @@ app.post("/api/chat", async (req, res) => {
           }
 
           if (!remindAt) {
-            // Fallback to tomorrow if parsing failed
             remindAt = new Date();
             remindAt.setDate(remindAt.getDate() + 1);
             remindAt.setHours(9, 0, 0, 0);
@@ -424,16 +652,7 @@ app.post("/api/chat", async (req, res) => {
 
           createdItem = await reminder.save();
           actionResult = reminder;
-          let cleanDateString = action.remindAt;
-          const isoDateMatch = cleanDateString.match(
-            /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/,
-          );
-          cleanDateString = isoDateMatch[0];
-          finalReply =
-            `✅ Reminder "${action.title}" set for "${cleanDateString}" ` +
-            (reply
-              ? reply.replace(/ACTION: CREATE_REMINDER[^\n]*\n?/, "")
-              : "");
+          finalReply = `✅ Reminder "${action.title}" set for ${remindAt.toLocaleString()}!`;
           break;
       }
     }
@@ -443,7 +662,7 @@ app.post("/api/chat", async (req, res) => {
       finalReply = finalReply.replace(/ACTION: [^\n]*\n?/g, "").trim();
     }
 
-    // 4. Save to chat history
+    // Save to chat history
     const chat = new Chat({
       usermsg: message,
       botmsg: finalReply || "I've processed your request.",

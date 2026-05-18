@@ -232,12 +232,25 @@ async function sendMessage() {
   }
 }
 
+marked.setOptions({
+  breaks: true,
+});
+
 function addMessageToChat(sender, message) {
   const chatMessages = document.getElementById("chatMessages");
+
   const messageDiv = document.createElement("div");
+
   messageDiv.className = sender === "user" ? "user-message" : "bot-message";
-  messageDiv.textContent = message;
+
+  if (sender === "user") {
+    messageDiv.textContent = message;
+  } else {
+    messageDiv.innerHTML = marked.parse(message);
+  }
+
   chatMessages.appendChild(messageDiv);
+
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 // public/script.js - add this function near the chat section

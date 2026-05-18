@@ -236,8 +236,83 @@ button:hover {
 }
 
 /* Empty state */
-p {
-  color: #7f8c8d;
-  text-align: center;
-  padding: 20px;
+.bot-message {
+  text-align: left;
+  color: #222;
+  line-height: 1.6;
+  white-space: normal;
+  word-wrap: break-word;
+}
+
+/* Paragraphs */
+.bot-message p {
+  margin: 8px 0;
+  text-align: left;
+}
+
+/* Lists */
+.bot-message ul,
+.bot-message ol {
+  padding-left: 20px;
+  margin: 10px 0;
+}
+
+/* Code blocks */
+.bot-message pre {
+  background: #f4f4f4;
+  padding: 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+/* Inline code */
+.bot-message code {
+  background: #f1f1f1;
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+
+/* Tables */
+.bot-message table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+
+.bot-message th,
+.bot-message td {
+  border: 1px solid #ccc;
+  padding: 10px;
+  text-align: left;
+}
+
+.bot-message th {
+  background-color: #f3f3f3;
+  font-weight: bold;
+}
+
+.bot-message tr:nth-child(even) {
+  background-color: #fafafa;
+}
+.bot-message table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+}
+
+.bot-message th,
+.bot-message td {
+  border: 1px solid #ccc;
+  padding: 10px;
+  text-align: left;
+}
+
+.bot-message th {
+  background-color: #f3f3f3;
+  font-weight: bold;
+}
+
+.bot-message tr:nth-child(even) {
+  background-color: #fafafa;
 }
