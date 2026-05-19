@@ -20,8 +20,13 @@ const {
   fetchRelevantData,
   formatContextForAI,
   setLastMentionedTask,
+  listTasks,
+  listReminders,
+  listNotes,
+  parseFiltersFromMessage,
+  handleListRequest,
 } = require("./services/dataFetcher");
-const { parseDate } = require("./services/dateParser");
+const { parseDate, testDateParser } = require("./services/dateParser");
 const {
   autoCreateDependencies,
   updateDependencies,
@@ -32,6 +37,54 @@ const {
   searchAllByKeyword,
 } = require("./services/autoCreateService.js");
 const { formatISTDate } = require("./utils/dateFormatter.js");
+
+// Helper function to format tasks as table
+function formatTaskListAsTable(tasks, filters = {}) {
+  if (!tasks || tasks.length === 0) return "No tasks found.";
+
+  let table = "| Task Title | Priority | Due Date | Status |\n";
+  table += "|------------|----------|----------|--------|\n";
+
+  for (const task of tasks) {
+    const dueDate = task.dueDate ? formatISTDate(task.dueDate) : "No date";
+    const status = task.completed ? "✅ Done" : "⏳ Pending";
+    table += `| ${task.title} | ${task.priority} | ${dueDate} | ${status} |\n`;
+  }
+
+  return `Found ${tasks.length} task(s):\n\n${table}`;
+}
+
+function formatNotesAsTable(notes) {
+  if (!notes || notes.length === 0) return "No notes found.";
+
+  let table = "| Note Title | Content Preview | Linked Task |\n";
+  table += "|------------|----------------|-------------|\n";
+
+  for (const note of notes) {
+    const preview = note.content ? note.content.substring(0, 50) : "Empty";
+    const linkedTask = note.linkedTask ? note.linkedTask.title : "Standalone";
+    table += `| ${note.title} | ${preview}... | ${linkedTask} |\n`;
+  }
+
+  return `Found ${notes.length} note(s):\n\n${table}`;
+}
+
+function formatRemindersAsTable(reminders) {
+  if (!reminders || reminders.length === 0) return "No reminders found.";
+
+  let table = "| Reminder Title | Reminder Time | Linked Task |\n";
+  table += "|----------------|---------------|-------------|\n";
+
+  for (const reminder of reminders) {
+    const time = formatISTDate(reminder.remindAt);
+    const linkedTask = reminder.linkedTask
+      ? reminder.linkedTask.title
+      : "Standalone";
+    table += `| ${reminder.title} | ${time} | ${linkedTask} |\n`;
+  }
+
+  return `Found ${reminders.length} reminder(s):\n\n${table}`;
+}
 
 // ============ API ENDPOINTS ============
 
@@ -45,7 +98,6 @@ app.delete("/api/tasks/:id", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
 // Update task status
 app.put("/api/tasks/:id", async (req, res) => {
   try {
@@ -61,8 +113,13 @@ app.put("/api/tasks/:id", async (req, res) => {
 // Delete note
 app.delete("/api/notes/:id", async (req, res) => {
   try {
+    const note = await Note.findById(req.params.id);
+    if (note && note.taskId) {
+      // Clear noteId from linked task
+      await Task.findByIdAndUpdate(note.taskId, { noteId: null });
+    }
     await Note.findByIdAndDelete(req.params.id);
-    res.json({ message: "Note deleted" });
+    res.json({ message: "Note deleted and task reference cleared" });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -78,8 +135,13 @@ app.get("/api/search/:keyword", async (req, res) => {
 // Delete reminder
 app.delete("/api/reminders/:id", async (req, res) => {
   try {
+    const reminder = await Reminder.findById(req.params.id);
+    if (reminder && reminder.taskId) {
+      // Clear reminderId from linked task
+      await Task.findByIdAndUpdate(reminder.taskId, { reminderId: null });
+    }
     await Reminder.findByIdAndDelete(req.params.id);
-    res.json({ message: "Reminder deleted" });
+    res.json({ message: "Reminder deleted and task reference cleared" });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -229,21 +291,31 @@ app.post("/api/chat", async (req, res) => {
     if (action) {
       switch (action.type) {
         case "CREATE_TASK":
-          console.log(`📝 Creating task: "${action.title}"`);
+          console.log(`📝 Creating task:`);
+          console.log(`   Title: "${action.title}"`);
+          console.log(`   Priority: "${action.priority}"`);
+          console.log(`   Due Date String: "${action.dueDate}"`);
 
           let dueDate = null;
           let originalDueDateString = action.dueDate || "";
           let hasExplicitTime = false;
 
-          if (action.dueDate) {
+          if (
+            action.dueDate &&
+            action.dueDate !== "null" &&
+            action.dueDate !== "undefined"
+          ) {
             dueDate = await parseDate(action.dueDate);
-            console.log(`  Parsed due date: ${dueDate}`);
+            console.log(`   Parsed due date: ${dueDate}`);
+            console.log(
+              `   Parsed due date UTC: ${dueDate ? dueDate.toISOString() : "null"}`,
+            );
 
             hasExplicitTime =
               /(?:\d{1,2}:\d{2}\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm))/i.test(
                 originalDueDateString,
               );
-            console.log(`  Has explicit time: ${hasExplicitTime}`);
+            console.log(`   Has explicit time: ${hasExplicitTime}`);
           }
 
           const task = new Task({
@@ -260,18 +332,25 @@ app.post("/api/chat", async (req, res) => {
           const savedTask = await task.save();
           console.log(`  ✅ Task saved with ID: ${savedTask._id}`);
 
+          // ✅ Create dependencies FIRST
           const {
             reminder: autoReminder,
             note: autoNote,
             error: autoError,
           } = await autoCreateDependencies(savedTask, hasExplicitTime);
 
-          let successMessage = `✅ Task "${action.title}" has been created with ${
-            action.priority || "medium"
-          } priority!\n\n`;
+          // ✅ THEN set as last mentioned task (after full creation)
+          setLastMentionedTask(savedTask.title, savedTask._id);
+          console.log(
+            `📌 Last mentioned task set to: "${savedTask.title}" (ID: ${savedTask._id})`,
+          );
+
+          let successMessage = `✅ Task "${action.title}" has been created with ${action.priority || "medium"} priority!\n\n`;
 
           if (autoReminder && originalDueDateString) {
             successMessage += `⏰ Reminder set for: ${originalDueDateString}\n`;
+          } else if (autoReminder && dueDate) {
+            successMessage += `⏰ Reminder set for: ${formatISTDate(dueDate)}\n`;
           }
 
           if (autoNote) {
@@ -285,7 +364,124 @@ app.post("/api/chat", async (req, res) => {
           createdItem = savedTask;
           actionResult = savedTask;
           finalReply = successMessage;
-          setLastMentionedTask(savedTask.title, savedTask._id);
+          break;
+        case "LIST_TASKS":
+          if (relevantData.tasks && relevantData.tasks.length === 1) {
+            console.log(
+              `⚠️ Overriding LIST_TASKS - Context has single task: "${relevantData.tasks[0].title}"`,
+            );
+            console.log(
+              `   AI wanted to list all tasks, but user asked for specific task.`,
+            );
+
+            // Format and show the single task directly
+            const task = relevantData.tasks[0];
+            const reminder = relevantData.reminders?.[0];
+            const note = relevantData.notes?.[0];
+
+            let table = "| Task Title | Priority | Due Date | Status |\n";
+            table += "|------------|----------|----------|--------|\n";
+            table += `| ${task.title} | ${task.priority} | ${task.dueDate ? formatISTDate(task.dueDate) : "No date"} | ${task.completed ? "Done" : "Pending"} |\n`;
+
+            if (reminder) {
+              table += `\n⏰ Reminder: ${formatISTDate(reminder.remindAt)}`;
+            }
+            if (note) {
+              const preview =
+                note.content?.length > 100
+                  ? note.content.substring(0, 100) + "..."
+                  : note.content || "No content";
+              table += `\n📝 Note: ${note.title} - ${preview}`;
+            }
+
+            finalReply = table;
+            action = null; // Clear the action so it doesn't process further
+            break; // Skip the action switch
+          }
+          console.log(`📋 Listing tasks with filter: "${action.filter}"`);
+
+          const filters = {};
+
+          // Parse the filter string
+          if (action.filter) {
+            const filterLower = action.filter.toLowerCase();
+            if (filterLower.includes("pending")) filters.status = "pending";
+            if (filterLower.includes("completed")) filters.status = "completed";
+            if (filterLower.includes("high")) filters.priority = "high";
+            if (filterLower.includes("medium")) filters.priority = "medium";
+            if (filterLower.includes("low")) filters.priority = "low";
+            if (filterLower.includes("today")) filters.dueDate = "today";
+            if (filterLower.includes("tomorrow")) filters.dueDate = "tomorrow";
+            if (filterLower.includes("overdue")) filters.dueDate = "overdue";
+          }
+
+          const tasks = await listTasks(filters);
+
+          // Format response
+          if (tasks.length === 0) {
+            finalReply = `No tasks found matching your criteria.`;
+          } else {
+            finalReply = formatTaskListAsTable(tasks, filters);
+          }
+          break;
+        case "LIST_NOTES":
+          console.log(`📝 Listing notes with filter: "${action.filter}"`);
+
+          const noteFilters = {};
+          if (action.filter) {
+            const filterLower = action.filter.toLowerCase();
+            if (filterLower.includes("with content"))
+              noteFilters.hasContent = true;
+            if (filterLower.includes("linked")) noteFilters.linked = true;
+            if (
+              filterLower.includes("unlinked") ||
+              filterLower.includes("standalone")
+            )
+              noteFilters.linked = false;
+            if (filterLower.includes("recent"))
+              noteFilters.createdAfter = new Date(
+                Date.now() - 7 * 24 * 60 * 60 * 1000,
+              );
+          }
+
+          const listedNotes = await listNotes(noteFilters);
+
+          if (listedNotes.length === 0) {
+            finalReply = `📝 No notes found matching your criteria.`;
+          } else {
+            finalReply = formatNotesAsTable(listedNotes);
+          }
+          break;
+
+        case "LIST_REMINDERS":
+          console.log(`⏰ Listing reminders with filter: "${action.filter}"`);
+
+          const reminderFilters = {};
+          if (action.filter) {
+            const filterLower = action.filter.toLowerCase();
+            if (filterLower.includes("today"))
+              reminderFilters.remindAt = "today";
+            if (filterLower.includes("tomorrow"))
+              reminderFilters.remindAt = "tomorrow";
+            if (filterLower.includes("upcoming"))
+              reminderFilters.remindAt = "upcoming";
+            if (filterLower.includes("past") || filterLower.includes("missed"))
+              reminderFilters.remindAt = "past";
+            if (filterLower.includes("linked")) reminderFilters.linked = true;
+            if (
+              filterLower.includes("unlinked") ||
+              filterLower.includes("standalone")
+            )
+              reminderFilters.linked = false;
+          }
+
+          const listedReminders = await listReminders(reminderFilters);
+
+          if (listedReminders.length === 0) {
+            finalReply = `⏰ No reminders found matching your criteria.`;
+          } else {
+            finalReply = formatRemindersAsTable(listedReminders);
+          }
           break;
 
         case "UPDATE_TASK":
@@ -477,6 +673,139 @@ app.post("/api/chat", async (req, res) => {
           actionResult = taskToUpdate;
 
           break;
+
+        case "DELETE_TASK":
+          console.log(
+            `🗑️ DELETE_TASK action received: "${action.searchQuery}"`,
+          );
+
+          let taskSearchTitle = action.searchQuery
+            .split("\n")[0]
+            .replace(/["']/g, "")
+            .trim();
+          console.log(`🔍 Searching for task to delete: "${taskSearchTitle}"`);
+
+          let taskToDelete = await Task.findOne({
+            title: { $regex: new RegExp(`^${taskSearchTitle}$`, "i") },
+          });
+
+          if (!taskToDelete) {
+            taskToDelete = await Task.findOne({
+              title: { $regex: new RegExp(taskSearchTitle, "i") },
+            });
+          }
+
+          if (!taskToDelete) {
+            finalReply = `❌ Could not find a task titled "${taskSearchTitle}".`;
+            break;
+          }
+
+          console.log(
+            `🗑️ Deleting task: "${taskToDelete.title}" (ID: ${taskToDelete._id})`,
+          );
+
+          // This already deletes both reminder and note
+          await deleteDependencies(taskToDelete._id);
+          await Task.findByIdAndDelete(taskToDelete._id);
+
+          finalReply = `✅ Task "${taskToDelete.title}" and its associated reminder & note have been permanently deleted!`;
+          createdItem = null;
+          actionResult = null;
+          break;
+
+        case "DELETE_REMINDER":
+          console.log(`⏰ Deleting reminder: "${action.searchQuery}"`);
+
+          let reminderSearchTitle = action.searchQuery
+            .split("\n")[0]
+            .replace(/["']/g, "")
+            .trim();
+          console.log(
+            `🔍 Searching for reminder to delete: "${reminderSearchTitle}"`,
+          );
+
+          let reminderToDelete = await Reminder.findOne({
+            title: { $regex: new RegExp(`^${reminderSearchTitle}$`, "i") },
+          });
+
+          if (!reminderToDelete) {
+            reminderToDelete = await Reminder.findOne({
+              title: { $regex: new RegExp(reminderSearchTitle, "i") },
+            });
+          }
+
+          if (!reminderToDelete) {
+            finalReply = `❌ Could not find a reminder titled "${reminderSearchTitle}".`;
+            break;
+          }
+
+          console.log(`🗑️ Deleting reminder: "${reminderToDelete.title}"`);
+
+          // FIX: Clear reminderId from linked task BEFORE deleting reminder
+          if (reminderToDelete.taskId) {
+            const linkedTask = await Task.findById(reminderToDelete.taskId);
+            if (linkedTask) {
+              linkedTask.reminderId = null;
+              await linkedTask.save();
+              console.log(
+                `  ✅ Cleared reminderId from linked task: "${linkedTask.title}"`,
+              );
+              finalReply = `✅ Reminder "${reminderToDelete.title}" has been deleted.\n📋 Removed reference from linked task "${linkedTask.title}".`;
+            } else {
+              finalReply = `✅ Reminder "${reminderToDelete.title}" has been deleted.`;
+            }
+          } else {
+            finalReply = `✅ Reminder "${reminderToDelete.title}" has been deleted.`;
+          }
+
+          await Reminder.findByIdAndDelete(reminderToDelete._id);
+          break;
+
+        case "DELETE_NOTE":
+          console.log(`📝 Deleting note: "${action.searchQuery}"`);
+
+          let noteSearchTitle = action.searchQuery
+            .split("\n")[0]
+            .replace(/["']/g, "")
+            .trim();
+          console.log(`🔍 Searching for note to delete: "${noteSearchTitle}"`);
+
+          let noteToDelete = await Note.findOne({
+            title: { $regex: new RegExp(`^${noteSearchTitle}$`, "i") },
+          });
+
+          if (!noteToDelete) {
+            noteToDelete = await Note.findOne({
+              title: { $regex: new RegExp(noteSearchTitle, "i") },
+            });
+          }
+
+          if (!noteToDelete) {
+            finalReply = `❌ Could not find a note titled "${noteSearchTitle}".`;
+            break;
+          }
+
+          console.log(`🗑️ Deleting note: "${noteToDelete.title}"`);
+
+          // FIX: Clear noteId from linked task BEFORE deleting note
+          if (noteToDelete.taskId) {
+            const linkedTask = await Task.findById(noteToDelete.taskId);
+            if (linkedTask) {
+              linkedTask.noteId = null;
+              await linkedTask.save();
+              console.log(
+                `  ✅ Cleared noteId from linked task: "${linkedTask.title}"`,
+              );
+              finalReply = `✅ Note "${noteToDelete.title}" has been deleted.\n📋 Removed reference from linked task "${linkedTask.title}".`;
+            } else {
+              finalReply = `✅ Note "${noteToDelete.title}" has been deleted.`;
+            }
+          } else {
+            finalReply = `✅ Note "${noteToDelete.title}" has been deleted.`;
+          }
+
+          await Note.findByIdAndDelete(noteToDelete._id);
+          break;
         case "UPDATE_REMINDER":
           console.log(`⏰ Updating reminder: "${action.searchQuery}"`);
 
@@ -496,23 +825,30 @@ app.post("/api/chat", async (req, res) => {
                 action.newValue,
               );
 
-            if (isOnlyTime) {
-              newRemindAt = new Date(reminderToUpdate.remindAt);
-              const parsedTime = await parseDate(action.newValue);
-              if (parsedTime) {
-                newRemindAt.setHours(
-                  parsedTime.getHours(),
-                  parsedTime.getMinutes(),
+            if (isOnlyTime && reminderToUpdate.remindAt) {
+              // Keep existing date, only update time
+              const existingUTC = new Date(reminderToUpdate.remindAt);
+              const parsedTimeUTC = await parseDate(action.newValue);
+
+              if (parsedTimeUTC) {
+                // parsedTimeUTC is already UTC from parseDate
+                newRemindAt = new Date(existingUTC);
+                newRemindAt.setUTCHours(
+                  parsedTimeUTC.getUTCHours(),
+                  parsedTimeUTC.getUTCMinutes(),
                   0,
                   0,
+                );
+                console.log(
+                  `  ⏰ Keeping date (UTC): ${existingUTC.toISOString().split("T")[0]}`,
+                );
+                console.log(
+                  `  ⏰ New UTC time: ${parsedTimeUTC.getUTCHours()}:${parsedTimeUTC.getUTCMinutes()}`,
                 );
               } else {
                 finalReply = `❌ Failed to parse time: ${action.newValue}`;
                 break;
               }
-              console.log(
-                `  ⏰ Keeping original date (${newRemindAt.toDateString()}), updating time only`,
-              );
             } else {
               newRemindAt = await parseDate(action.newValue);
             }
@@ -520,64 +856,31 @@ app.post("/api/chat", async (req, res) => {
             if (newRemindAt) {
               reminderToUpdate.remindAt = newRemindAt;
               await reminderToUpdate.save();
+              console.log(
+                `  ✅ Reminder UTC updated to: ${newRemindAt.toISOString()}`,
+              );
+              console.log(
+                `  ✅ Reminder IST display: ${formatISTDate(newRemindAt)}`,
+              );
 
               if (reminderToUpdate.taskId) {
                 const linkedTask = await Task.findById(reminderToUpdate.taskId);
                 if (linkedTask) {
                   linkedTask.dueDate = newRemindAt;
                   await linkedTask.save();
-                  finalReply = `✅ Reminder "${action.searchQuery}" updated to ${newRemindAt.toLocaleString()}\n📋 Linked task "${linkedTask.title}" due date also updated.`;
+                  finalReply = `✅ Reminder "${action.searchQuery}" updated to ${formatISTDate(newRemindAt)}\n📋 Linked task "${linkedTask.title}" due date also updated.`;
                 } else {
-                  finalReply = `✅ Reminder "${action.searchQuery}" updated to ${newRemindAt.toLocaleString()}`;
+                  finalReply = `✅ Reminder "${action.searchQuery}" updated to ${formatISTDate(newRemindAt)}`;
                 }
               } else {
-                finalReply = `✅ Reminder "${action.searchQuery}" updated to ${newRemindAt.toLocaleString()}`;
+                finalReply = `✅ Reminder "${action.searchQuery}" updated to ${formatISTDate(newRemindAt)}`;
               }
             } else {
               finalReply = `❌ Failed to parse date/time: ${action.newValue}`;
             }
+          } else {
+            finalReply = `❌ I don't know how to update the field "${action.field}" for reminders.`;
           }
-          break;
-
-        case "DELETE_TASK":
-          console.log(
-            `🗑️ DELETE_TASK action received: "${action.searchQuery}"`,
-          );
-
-          let searchTitle = action.searchQuery.replace(/["']/g, "").trim();
-          searchTitle = searchTitle.replace(/[.!?]+$/, "");
-
-          const taskToDelete = await Task.findOne({
-            title: { $regex: new RegExp(`^${searchTitle}$`, "i") },
-          });
-
-          if (!taskToDelete) {
-            finalReply = `❌ Could not find a task titled "${searchTitle}".`;
-            break;
-          }
-
-          await deleteDependencies(taskToDelete._id);
-          await Task.findByIdAndDelete(taskToDelete._id);
-
-          finalReply = `✅ Task "${taskToDelete.title}" and its associated reminder & note have been permanently deleted!`;
-          createdItem = null;
-          actionResult = null;
-          break;
-
-        case "DELETE_REMINDER":
-          console.log(`⏰ Deleting reminder: "${action.searchQuery}"`);
-
-          const reminderToDelete = await Reminder.findOne({
-            title: { $regex: new RegExp(`^${action.searchQuery}$`, "i") },
-          });
-
-          if (!reminderToDelete) {
-            finalReply = `❌ Could not find a reminder titled "${action.searchQuery}".`;
-            break;
-          }
-
-          await Reminder.findByIdAndDelete(reminderToDelete._id);
-          finalReply = `✅ Reminder "${action.searchQuery}" has been deleted.`;
           break;
 
         case "UPDATE_NOTE":
@@ -601,22 +904,6 @@ app.post("/api/chat", async (req, res) => {
             await noteToUpdate.save();
             finalReply = `✅ Note "${action.searchQuery}" content updated.`;
           }
-          break;
-
-        case "DELETE_NOTE":
-          console.log(`📝 Deleting note: "${action.searchQuery}"`);
-
-          const noteToDelete = await Note.findOne({
-            title: { $regex: new RegExp(`^${action.searchQuery}$`, "i") },
-          });
-
-          if (!noteToDelete) {
-            finalReply = `❌ Could not find a note titled "${action.searchQuery}".`;
-            break;
-          }
-
-          await Note.findByIdAndDelete(noteToDelete._id);
-          finalReply = `✅ Note "${action.searchQuery}" has been deleted.`;
           break;
 
         case "CREATE_NOTE":

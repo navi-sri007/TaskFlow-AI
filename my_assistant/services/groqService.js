@@ -1,11 +1,13 @@
 // services/groqService.js (updated version)
 
 const Groq = require("groq-sdk");
+const {
+  getLastMentionedTask,
+  getLastMentionedTaskId,
+} = require("./dataFetcher");
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 });
-const { formatISTDate } = require("../utils/dateFormatter");
-
 // Store conversation history per session
 const conversationHistory = new Map();
 
@@ -26,7 +28,7 @@ When user asks for "tabular form", "as a table", "table format", or "table":
 FOR SINGLE TASK (with all details + linked reminder + linked note):
 | Task Title | Priority | Due Date | Status | Reminder  | Note Title | 
 |------------|----------|----------|--------|----------|--------------|
-| Buy groceries | High | 2026-05-20 | Pending | Buy groceries reminder | Buy groceries note | 
+| Buy groceries | High | 2026-05-20 | Pending | Buy groceries  | Buy groceries | 
 
 FOR SINGLE REMINDER (with linked task details):
 | Reminder Title | Reminder Time | Linked Task | Task Status |
@@ -56,78 +58,22 @@ FOR MULTIPLE NOTES:
 | Note 1 | Content preview... | Task 1 | High |
 | Note 2 | Content preview... | Task 2 | Medium |
 
-===========================================
-CRITICAL RULES FOR TABLES:
-===========================================
-1. When user asks for a TASK → Show Task details + its linked Reminder + its linked Note (all in ONE row)
-2. When user asks for a REMINDER → Show Reminder details + its linked Task details (NO extra information)
-3. When user asks for a NOTE → Show Note details + its linked Task details (NO extra information)
-4. Use column headers as the field names
-5. Put values directly below each column
-6. NO "Field | Value" pairs - only column-wise tables
 
-===========================================
-DATE DISPLAY FORMATTING RULES:
-===========================================
-When displaying dates and times in tables or responses:
+===========================
+CRITICAL ACTION FORMATTING RULES:
+===========================
+- When outputting an ACTION, put it on its OWN LINE
+- DO NOT add any extra text, explanations, or punctuation after the action
+Example 
+CORRECT format:
+ACTION: DELETE_TASK|Pay bills
+WRONG (DO NOT DO THIS):
+ACTION: DELETE_TASK|Pay bills
+The task "Pay bills" has been deleted.
 
-- ALWAYS convert UTC ISO strings to IST (Indian Standard Time)
-- IST = UTC + 5 hours 30 minutes
-- NEVER display raw ISO strings like "2026-05-18T20:00:00.000Z" to the user
-- ALWAYS format dates using:
-  formatISTDate(date)
+NOTE: THIS IS APPLICATBLE FOR ALL ACTION TYPES (CREATE, UPDATE, DELETE) AND ALL ENTITIES (TASK, NOTE, REMINDER)
 
-DISPLAY FORMAT:
-"DD/MM/YYYY, HH:MM:SS AM/PM"
-
-EXAMPLES WITH CALCULATION REFERENCE:
-
-1.
-UTC Stored Value:
-"2026-05-18T16:30:00.000Z"
-
-Calculation:
-16:30 UTC + 5:30
-= 22:00 IST
-
-Displayed Result:
-"18/05/2026, 10:00:00 pm"
-
-2.
-UTC Stored Value:
-"2026-05-18T09:00:00.000Z"
-
-Calculation:
-09:00 UTC + 5:30
-= 14:30 IST
-
-Displayed Result:
-"18/05/2026, 2:30:00 pm"
-
-3.
-UTC Stored Value:
-"2026-05-18T20:00:00.000Z"
-
-Calculation:
-20:00 UTC + 5:30
-= 01:30 IST (next day)
-
-Displayed Result:
-"19/05/2026, 1:30:00 am"
-
-IMPORTANT:
-- MongoDB stores dates internally in UTC
-- Convert ONLY during display
-- Never save formatted IST strings into MongoDB
-- Always store proper Date objects in database
-
-
-Correct:
-{formatISTDate(task.dueDate)}
-
-Wrong:
-{task.dueDate}
-{new Date(task.dueDate).toLocaleString()}
+- the action line itself must be clean and contain ONLY the action
 
 `;
 }
@@ -141,7 +87,12 @@ async function getAIResponse(userMessage, contextData, sessionId) {
       role: "user",
       content: userMessage,
     });
+    const MAX_HISTORY_MESSAGES = 8; // 4 user + 4 assistant
+    if (history.length > MAX_HISTORY_MESSAGES) {
+      history = history.slice(-MAX_HISTORY_MESSAGES);
+    }
 
+    const recentHistory = history.slice(-6);
     // Prepare context from database
     const contextPrompt = `
 ========================
@@ -164,41 +115,32 @@ Your responsibilities include:
   - "the important one"
 
 ========================
-DATABASE JSON
+DATABASE 
 ========================
-
-The following JSON was retrieved from the database.
-
 ${contextData}
-
 STRICT DATABASE RULES:
-- Use ONLY this JSON data
-- NEVER assume missing fields
-- NEVER invent reminders, notes, or tasks
-- If an array is empty, say no records found
-- If reminder exists in JSON, it EXISTS
-- If note exists in JSON, it EXISTS
-- The JSON is the source of truth for all information about tasks, notes, and reminders.
+- Use ONLY this data. Don't invent anything.
+- Always check before concluding not present.
 
 ========================
 CONVERSATION MEMORY
 ========================
 
-Recent conversation history:
-
-${history
-  .slice(-8)
+RECENT CONVERSATION (last ${recentHistory.length} messages):
+${recentHistory
   .map((msg, index) => {
-    return `${index + 1}. ${msg.role.toUpperCase()}: ${msg.content}`;
+    // FIX 3: Truncate long messages
+    const content =
+      msg.content.length > 200
+        ? msg.content.substring(0, 200) + "..."
+        : msg.content;
+    return `${index + 1}. ${msg.role.toUpperCase()}: ${content}`;
   })
   .join("\n")}
 
 MEMORY RULES:
 - Maintain continuity between messages.
 - Understand follow-up references using previous conversation.
-- If the user refers indirectly to something previously discussed,
-  infer the correct reference intelligently.
-- Give priority to the most recent relevant conversation context.
 
 ========================
 CURRENT USER MESSAGE
@@ -222,434 +164,125 @@ RESPONSE BEHAVIOR RULES
 8. Do not hallucinate missing data.
 9. **When user wants to CREATE something, output the ACTION first, then a friendly confirmation.**
 ========================
-TASK UNDERSTANDING RULES
-========================
+DATE RULES:
 
-When interpreting user requests:
-- "today" means current date
-- "tomorrow" means next day
-- "important" refers to priority=important
-- "high priority" refers to priority=high
+- today = current date
+- tomorrow = +1 day
+- day after tomorrow = +2 days
 
-Understand intent variations such as:
-- "show"
-- "list"
-- "tell me"
-- "what are"
-- "do I have"
-- "add"
-- "create"
-- "make a note"
-- "remind me"
-- "set a task"
+Weekdays:
+Sunday=0 ... Saturday=6
 
-All may refer to retrieving or creating records.
-
-========================
-DATE PARSING CALCULATION STEPS
-========================
-
-STEP 1: Detect current date and time
-- Use the system's current local date/time as reference.
-- Example:
-  Current Date = 17 May 2026
-  Current Time = 1:30 PM
-
-------------------------
-
-STEP 2: Identify the date keyword/type
-
-Possible patterns:
-
-1. Relative Dates
-- today
-- tomorrow
-- day after tomorrow
-
-2. Weekday Names
-- Monday
-- Friday
-- next Tuesday
-
-3. Explicit Dates
-- May 15
-- May 15th
-- 15 May
-- 15/05/2026
-
-4. Date + Time
-- today at 4pm
-- tomorrow 2:30 PM
-- May 15th at 10:00 AM
-
-------------------------
-
-STEP 3: Calculate the actual calendar date
-
-A) "today"
-Calculation:
-- Use current date directly.
-
-Example:
-Current Date = 17 May 2026
-Input = "today"
-
-Result:
-17 May 2026
-
-------------------------
-
-B) "tomorrow"
-Calculation:
-- Add 1 day to current date.
-
-Example:
-Current Date = 17 May 2026
-Input = "tomorrow"
-
-Result:
-18 May 2026
-
-------------------------
-
-C) "next Monday"
-Calculation:
-1. Find today's weekday.
-2. Find target weekday number.
-3. Compute difference.
-
-Weekday Index:
-Sunday = 0
-Monday = 1
-Tuesday = 2
-Wednesday = 3
-Thursday = 4
-Friday = 5
-Saturday = 6
-
-Formula:
 daysToAdd =
 (targetDay - currentDay + 7) % 7
+if 0 → 7
 
-If result = 0:
-daysToAdd = 7
+Supported:
+- Friday
+- next Monday
+- May 15
+- 15/05/2026
+- today 4pm
+- tomorrow 2:30 PM
 
-Example:
-Today = Sunday (0)
-Target = Monday (1)
+Time:
+- 2 PM → 14:00
+- 12 AM → 00:00
 
-(1 - 0 + 7) % 7 = 1
+Defaults:
+- task date only → 00:00:00
+- reminder date only → 09:00:00
 
-Result:
-Add 1 day.
-
-------------------------
-
-D) "Friday"
-Calculation:
-- Same weekday formula.
-
-Example:
-Today = Sunday (0)
-Target = Friday (5)
-
-(5 - 0 + 7) % 7 = 5
-
-Result:
-Add 5 days.
-
-------------------------
-
-E) Explicit date like "May 15th"
-Calculation:
-1. Extract month.
-2. Extract date.
-3. Use current year unless specified.
-
-Example:
-Input = "May 15th"
-
-Result:
-15 May 2026
-
-------------------------
-
-STEP 4: Detect time
-
-Time patterns:
-- 2pm
-- 2 PM
-- 2:30pm
-- 14:30
-
-Regex Example:
-(?:\d{1,2}:\d{2}\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm))
-
-------------------------
-
-STEP 5: Convert time to 24-hour format
-
-Examples:
-
-2 PM
-= 14:00
-
-12 AM
-= 00:00
-
-12 PM
-= 12:00
-
-4:30 PM
-= 16:30
-
-9 AM
-= 09:00
-
-------------------------
-
-STEP 6: Default time handling
-
-RULES:
-
-If user gives explicit time:
-- Use provided time.
-
-Example:
-"today at 4:30 PM"
-→ 16:30:00
-
-------------------------
-
-If user gives date only:
-- Use 09:00:00 OR 00:00:00 based on system rule.
-
-Example:
-"tomorrow"
-→ 09:00:00
-
-------------------------
-
-For tasks without specific time:
-- Use:
-00:00:00
-
-Example:
-"Finish report tomorrow"
-→ 2026-05-18T00:00:00
-
-------------------------
-
-STEP 7: Generate ISO Date
-
-Format:
+Output:
 YYYY-MM-DDTHH:mm:ss
 
-Examples:
 
-17 May 2026 4:30 PM
-→ 2026-05-17T16:30:00
+// Replace the entire ACTION GENERATION RULES section with this:
 
-18 May 2026 9:00 AM
-→ 2026-05-18T09:00:00
+**ACTIONS (first line only):**
+CREATE_TASK|title|priority|dueDate
+CREATE_NOTE|title|content
+CREATE_REMINDER|title|remindAt
+UPDATE_TASK|title|field|value
+UPDATE_REMINDER|title|field|value
+UPDATE_NOTE|title|field|value
+DELETE_TASK|title
+DELETE_REMINDER|title
+DELETE_NOTE|title
 
-------------------------
+**Rules:**
+• Default priority: medium
+• Default dueDate: tomorrow 09:00 IST
+• Fields: dueDate, priority, title, completed, remindAt, content
+• "update/change" = UPDATE_TASK (NEVER create)
+• "create/add/new" = CREATE_TASK
+• For time-only updates, preserve existing date
 
-FINAL EXAMPLES
+**Examples:**
+CREATE_TASK|buy milk|medium|tomorrow
+CREATE_NOTE|Project idea|AI assistant description
+CREATE_REMINDER|water plants|2026-05-11T18:00:00
+UPDATE_TASK|Pay bills|dueDate|tomorrow 2pm
+UPDATE_REMINDER|Call mom|remindAt|Friday 5pm
+UPDATE_NOTE|Meeting notes|content|new points
+DELETE_TASK|great bday
+DELETE_REMINDER|Call mom
+DELETE_NOTE|Old notes
 
-Input:
-"Set task tomorrow"
-
-Steps:
-1. Current Date = 17 May 2026
-2. Tomorrow = +1 day
-3. No explicit time
-4. Use 00:00:00
-
-Final:
-2026-05-18T00:00:00
-
-------------------------
-
-Input:
-"Meeting Friday at 2 PM"
-
-Steps:
-1. Today = Sunday
-2. Friday = +5 days
-3. 2 PM = 14:00
-
-Final:
-2026-05-22T14:00:00
-
-------------------------
-
-Input:
-"Call mom May 15th at 10:30 AM"
-
-Steps:
-1. Month = May
-2. Date = 15
-3. Year = current year
-4. 10:30 AM = 10:30
-
-Final:
-2026-05-15T10:30:00
-
-===========================================
-DATE DISPLAY FORMATTING RULES:
-===========================================
-When displaying dates and times in tables or responses:
-
-- ALWAYS convert UTC ISO strings to IST (Indian Standard Time)
-- IST = UTC + 5 hours 30 minutes
-- NEVER display raw ISO strings like "2026-05-18T20:00:00.000Z" to the user
-- ALWAYS format dates using:
-  formatISTDate(date)
-
-DISPLAY FORMAT:
-"DD/MM/YYYY, HH:MM:SS AM/PM"
-
-EXAMPLES WITH CALCULATION REFERENCE:
-
-1.
-UTC Stored Value:
-"2026-05-18T16:30:00.000Z"
-
-Calculation:
-16:30 UTC + 5:30
-= 22:00 IST
-
-Displayed Result:
-"18/05/2026, 10:00:00 pm"
-
-2.
-UTC Stored Value:
-"2026-05-18T09:00:00.000Z"
-
-Calculation:
-09:00 UTC + 5:30
-= 14:30 IST
-
-Displayed Result:
-"18/05/2026, 2:30:00 pm"
-
-3.
-UTC Stored Value:
-"2026-05-18T20:00:00.000Z"
-
-Calculation:
-20:00 UTC + 5:30
-= 01:30 IST (next day)
-
-Displayed Result:
-"19/05/2026, 1:30:00 am"
-
-IMPORTANT:
-- MongoDB stores dates internally in UTC
-- Convert ONLY during display
-- Never save formatted IST strings into MongoDB
-- Always store proper Date objects in database
+**Related items response:**
+Task query → Show task + reminder + note
+Reminder query → Show reminder + linked task
+Note query → Show note + linked task 
 
 
-Correct:
-{formatISTDate(task.dueDate)}
+⚠️⚠️⚠️ CRITICAL INSTRUCTION - READ FIRST ⚠️⚠️⚠️
 
-Wrong:
-{task.dueDate}
-{new Date(task.dueDate).toLocaleString()}
-========================
-ACTION GENERATION RULES
-========================
+If the DATABASE context below contains a task with title matching what the user asked for:
+- DO NOT output ACTION: LIST_TASKS
+- DISPLAY the task directly in table format
 
-When user wants to CREATE something, respond with action THEN confirmation.
+ONLY use ACTION: LIST_TASKS when:
+- User explicitly says "list all tasks"
+- The context has NO tasks (empty)
 
-Format:
-ACTION: CREATE_TYPE|field1|field2|field3
+When user asks to "list tasks", "show pending tasks", etc.:
+1. FIRST output: ACTION: LIST_TASKS|pending
 
-Rules:
-- Do not include explanations before the action.
-- Use the exact extracted details from context.
-- For tasks: title, priority, dueDate (priority default: medium, dueDate default: tomorrow)
-- For notes: title, content
-- For reminders: title, remindAt (ISO datetime)
-- Only generate actions when the user's intent is clearly requesting creation.
+**CRITICAL - DISTINGUISH BETWEEN TASK AND REMINDER:**
+
+UPDATE_TASK is for tasks only. Fields: dueDate, priority, title, completed
+UPDATE_REMINDER is for reminders only. Fields: remindAt (time only or date+time)
+
+When user says "update the reminder...":
+- ALWAYS use UPDATE_REMINDER, NOT UPDATE_TASK
 
 Examples:
-User: "Add task to buy milk tomorrow"
-ACTION: CREATE_TASK|buy milk|medium|2026-05-12
+User: "update the reminder parents to 2pm"
+→ ACTION: UPDATE_REMINDER|parents|remindAt|2pm
 
 
-User: "Take a note: Project idea about AI assistant"
-ACTION: CREATE_NOTE|Project idea|AI assistant that can manage tasks naturally
+=================
+LISTING ACTIONS:
+=================
+Examples:
+User: "list pending tasks" 
+→ ACTION: LIST_TASKS|pending
+→ I'll show you the pending tasks.
+
+USE LIST action.
+=================
+GET ACTION (Single entity):
+==================
+CRITICAL:
+IMPORTANT: If context contains only ONE task, show ONLY that task or reminder or note.
+Do NOT list all tasks when user asks for a specific one.
+Examples:
+User: "show Engagement in table"
+→ (Context contains only Engagement task)
+→ Display with Engagement's details
 
 
-User: "Remind me to water plants at 6pm today"
-ACTION: CREATE_REMINDER|water plants|2026-05-11T18:00:00
-
-UPDATE ACTIONS:
-
-UPDATE_TASK (for existing tasks):
-ACTION: UPDATE_TASK|existing_title|field_to_update|new_value
-
-UPDATE Examples:
-- User: "update its duedate to tomorrow" → ACTION: UPDATE_TASK|UPDATE|dueDate|tomorrow
-- User: "update its priority as low" → ACTION: UPDATE_TASK|UPDATE|priority|low
-- User: "set its duedate to tomorrow" → ACTION: UPDATE_TASK|UPDATE|dueDate|tomorrow
-- User: "change priority to high" → ACTION: UPDATE_TASK|task_title|priority|high
-
-Available fields for UPDATE_TASK: dueDate, priority, title, completed
-
-UPDATE_REMINDER Examples:
-- User: "change reminder time of 'Call mom' to tomorrow at 5pm" → ACTION: UPDATE_REMINDER|Call mom|remindAt|tomorrow at 5pm
-- User: "update reminder 'Meeting' to next Monday" → ACTION: UPDATE_REMINDER|Meeting|remindAt|next Monday
-Note: When updating reminder time , if user gives only time update time alone keeping the data the same as before and do it vice versa if data alone is given to update.
-for example: -> User: update the update_rem reminder time to 3pm (already has data :23-05-2026)
-then ->✅ Reminder "update_rem" updated to 23/05/2026, 3:00:00 pm
-
-UPDATE_NOTE Examples:
-- User: "update note 'Meeting notes' content to add new points" → ACTION: UPDATE_NOTE|Meeting notes|content|add new points
-- User: "rename note 'Old ideas' to 'New ideas'" → ACTION: UPDATE_NOTE|Old ideas|title|New ideas
-
-DELETE ACTIONS:
-
-DELETE TASKS Examples:
-- User: "delete the task great bday" → ACTION: DELETE_TASK|great bday
-- User: "remove the task great bday" → ACTION: DELETE_TASK|great bday
-- User: "permanently delete great bday" → ACTION: DELETE_TASK|great bday
-- User: "delete task checking" → ACTION: DELETE_TASK|checking
-
-DELETE_REMINDER Examples:
-- User: "delete reminder 'Call mom'" → ACTION: DELETE_REMINDER|Call mom
-- User: "remove reminder 'Water plants'" → ACTION: DELETE_REMINDER|Water plants
-
-DELETE_NOTE Examples:
-- User: "delete note 'Old notes'" → ACTION: DELETE_NOTE|Old notes
-- User: "remove note 'Test note'" → ACTION: DELETE_NOTE|Test note
-
-Always output ACTION: on the first line.
-
-
-When user asks about related items, respond with:
-
-For task queries:
-"show me everything related to [task name]"
-Response: Here's the complete information for task "[task name]":
-- Task: [title] (Priority: X, Due: Y)
-- Reminder: [reminder title] at [time]
-- Note: [note title] - [preview of content]
-
-For reminder queries:
-"what task is this reminder for?"
-Response: This reminder "[reminder name]" is for task "[task name]" which has priority [priority].
-
-For note queries:
-"show me the task for this note"
-Response: This note belongs to task "[task name]" which is due on [date].
-========================
-FINAL INSTRUCTION
-========================
-
+FINAL INSTRUCTION:
 Generate the best possible response using:
 - database context
 - previous conversation
@@ -657,8 +290,6 @@ Generate the best possible response using:
 - contextual references
 - conversational memory
 - **ACTION creation when requested**
-
-CRITICAL : When user gives time while setting the task, respond the reminder line with that time, if time is not given reply as 9AM defaultly.
 
 Respond now.
 `;
@@ -674,22 +305,30 @@ Respond now.
       max_tokens: 500,
     });
 
+    const usage = completion.usage;
+    console.log(`📊 TOKEN USAGE:`);
+    console.log(`   Prompt tokens: ${usage.prompt_tokens}`);
+    console.log(`   Completion tokens: ${usage.completion_tokens}`);
+    console.log(`   Total tokens: ${usage.total_tokens}`);
+
     let aiResponse =
       completion.choices[0]?.message?.content ||
       "Sorry, I couldn't process that.";
-
-    // Add AI response to history
+    // Keep only last 10 messages for context
     history.push({
       role: "assistant",
       content: aiResponse,
     });
 
-    // Keep only last 10 messages for context
-    if (history.length > 10) {
-      history = history.slice(-10);
+    // FIX 4: Re-apply limit after adding assistant response
+    if (history.length > MAX_HISTORY_MESSAGES) {
+      history = history.slice(-MAX_HISTORY_MESSAGES);
     }
-    conversationHistory.set(sessionId, history);
 
+    conversationHistory.set(sessionId, history);
+    console.log(
+      `📊 Session ${sessionId}: History size = ${history.length} messages, ~${JSON.stringify(history).length} chars`,
+    );
     // Return both response and any action
     return {
       reply: aiResponse,
@@ -707,7 +346,66 @@ Respond now.
 // Helper function to extract actions from AI response
 // Helper function to extract actions from AI response
 function extractAction(response) {
+  // Helper function to clean search query
+  function cleanSearchQuery(query) {
+    if (!query) return "";
+    let cleaned = query.split("\n")[0];
+    cleaned = cleaned.replace(/["']/g, "");
+    cleaned = cleaned.replace(/[.!?]+$/, "");
+    cleaned = cleaned.replace(
+      /\s+(?:The|This)\s+(?:task|note|reminder).*$/i,
+      "",
+    );
+    cleaned = cleaned.replace(/\s+has?\s+been\s+deleted.*$/i, "");
+    return cleaned.trim();
+  }
+
+  // ✅ CHECK: If response contains a table or task details, don't extract action
+  if (
+    response.includes("| Task Title |") ||
+    (response.includes("Task Title") && response.includes("Priority"))
+  ) {
+    console.log("📋 Response already contains table, no action needed");
+    return null;
+  }
+
+  // ✅ Check for LIST_TASKS - but verify it's not a false positive
+  if (response.includes("ACTION: LIST_TASKS")) {
+    // Make sure the AI isn't hallucinating LIST_TASKS when it has the data
+    const match = response.match(/ACTION: LIST_TASKS(?:\|(.+))?/);
+    console.log("⚠️ AI wants to use LIST_TASKS");
+    return {
+      type: "LIST_TASKS",
+      filter: match?.[1] || "all",
+    };
+  }
+
   // Check for UPDATE_TASK action (MUST BE FIRST to avoid being caught by CREATE patterns)
+  if (response.includes("ACTION: LIST_TASKS")) {
+    const match = response.match(/ACTION: LIST_TASKS(?:\|(.+))?/);
+    console.log("Listingtasks");
+    return {
+      type: "LIST_TASKS",
+      filter: match?.[1] || null,
+    };
+  }
+  // Check for LIST_NOTES action
+  if (response.includes("ACTION: LIST_NOTES")) {
+    const match = response.match(/ACTION: LIST_NOTES(?:\|(.+))?/);
+    return {
+      type: "LIST_NOTES",
+      filter: match?.[1] || null,
+    };
+  }
+
+  // Check for LIST_REMINDERS action
+  if (response.includes("ACTION: LIST_REMINDERS")) {
+    const match = response.match(/ACTION: LIST_REMINDERS(?:\|(.+))?/);
+    return {
+      type: "LIST_REMINDERS",
+      filter: match?.[1] || null,
+    };
+  }
   if (response.includes("ACTION: UPDATE_TASK")) {
     const match = response.match(
       /ACTION: UPDATE_TASK\|([^|]+)\|([^|]+)\|(.+?)(?:\n|$)/,
@@ -753,7 +451,7 @@ function extractAction(response) {
     if (match) {
       return {
         type: "DELETE_REMINDER",
-        searchQuery: match[1].trim(),
+        searchQuery: cleanSearchQuery(match[1]),
       };
     }
   }
@@ -764,24 +462,29 @@ function extractAction(response) {
     if (match) {
       return {
         type: "DELETE_NOTE",
-        searchQuery: match[1].trim(),
+        searchQuery: cleanSearchQuery(match[1]),
       };
     }
   }
   // Check for DELETE_TASK action
+  // Check for DELETE_TASK action
   if (response.includes("ACTION: DELETE_TASK")) {
-    const match = response.match(/ACTION: DELETE_TASK\|([^|]+)/);
+    const match = response.match(/ACTION: DELETE_TASK\|([^|\n]+)/);
     if (match) {
       return {
         type: "DELETE_TASK",
-        searchQuery: match[1].trim(),
+        searchQuery: cleanSearchQuery(match[1]),
       };
     }
   }
 
   // Check for CREATE_TASK action
+  // In groqService.js - update the CREATE_TASK case
+
+  // Check for CREATE_TASK action
   if (response.includes("ACTION: CREATE_TASK")) {
-    const match = response.match(
+    // Try to match with 3 parameters (title, priority, dueDate)
+    let match = response.match(
       /ACTION: CREATE_TASK\|([^|]+)\|([^|]+)\|([^|]+)/,
     );
     if (match) {
@@ -792,18 +495,31 @@ function extractAction(response) {
         dueDate: match[3].trim(),
       };
     }
-    // Try without due date
-    const matchWithoutDate = response.match(
-      /ACTION: CREATE_TASK\|([^|]+)\|([^|]+)/,
-    );
-    if (matchWithoutDate) {
+
+    // Try with 2 parameters (title, priority)
+    match = response.match(/ACTION: CREATE_TASK\|([^|]+)\|([^|]+)/);
+    if (match) {
       return {
         type: "CREATE_TASK",
-        title: matchWithoutDate[1].trim(),
-        priority: matchWithoutDate[2].trim().toLowerCase(),
+        title: match[1].trim(),
+        priority: match[2].trim().toLowerCase(),
         dueDate: null,
       };
     }
+
+    // Try with just title (default priority)
+    match = response.match(/ACTION: CREATE_TASK\|([^|]+)/);
+    if (match) {
+      return {
+        type: "CREATE_TASK",
+        title: match[1].trim(),
+        priority: "medium",
+        dueDate: null,
+      };
+    }
+    console.log(
+      `📌 Current last mentioned task: "${getLastMentionedTask()}" (ID: ${getLastMentionedTaskId()})`,
+    );
   }
 
   // Check for CREATE_NOTE action

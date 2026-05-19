@@ -207,29 +207,54 @@ async function updateDependencies(task, updates, previousValues = {}) {
  * Delete dependencies when task is deleted
  * @param {string} taskId - Task ID
  */
+// services/autoCreateServices.js
+
+/**
+ * Delete dependencies when task is deleted
+ * @param {string} taskId - Task ID
+ */
 async function deleteDependencies(taskId) {
   try {
     console.log(`🔄 Deleting dependencies for task ID: ${taskId}`);
 
-    const result = await Promise.all([
-      Reminder.deleteMany({ taskId: taskId }),
-      Note.deleteMany({ taskId: taskId }),
-    ]);
+    // First, find the task to get reminderId and noteId
+    const task = await Task.findById(taskId);
 
-    console.log(`  ✅ Deleted ${result[0].deletedCount} reminder(s)`);
-    console.log(`  ✅ Deleted ${result[1].deletedCount} note(s)`);
+    if (task) {
+      // If task has reminderId, delete that specific reminder
+      if (task.reminderId) {
+        await Reminder.findByIdAndDelete(task.reminderId);
+        console.log(`  ✅ Deleted reminder: ${task.reminderId}`);
+      }
+
+      // If task has noteId, delete that specific note
+      if (task.noteId) {
+        await Note.findByIdAndDelete(task.noteId);
+        console.log(`  ✅ Deleted note: ${task.noteId}`);
+      }
+    }
+
+    // Fallback: delete all dependencies with this taskId (cleanup any orphans)
+    const reminderResult = await Reminder.deleteMany({ taskId: taskId });
+    const noteResult = await Note.deleteMany({ taskId: taskId });
+
+    if (reminderResult.deletedCount > 0 || noteResult.deletedCount > 0) {
+      console.log(
+        `  ✅ Cleaned up ${reminderResult.deletedCount} orphaned reminder(s) and ${noteResult.deletedCount} orphaned note(s)`,
+      );
+    }
+
     console.log(`✨ Dependency deletion completed`);
-
     return {
-      remindersDeleted: result[0].deletedCount,
-      notesDeleted: result[1].deletedCount,
+      remindersDeleted:
+        reminderResult.deletedCount || (task?.reminderId ? 1 : 0),
+      notesDeleted: noteResult.deletedCount || (task?.noteId ? 1 : 0),
     };
   } catch (error) {
     console.error(`❌ Error deleting dependencies:`, error);
     return { remindersDeleted: 0, notesDeleted: 0, error: error.message };
   }
 }
-
 /**
  * Get a task with all its dependencies
  * @param {string} taskId - Task ID
