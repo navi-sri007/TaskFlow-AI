@@ -2,7 +2,13 @@
 const Task = require("../models/Task");
 const Note = require("../models/Note");
 const Reminder = require("../models/Reminder");
-const { formatISTDate } = require("../utils/dateFormatter");
+const {
+  formatISTDate,
+  getISTStartOfDay,
+  getISTStartOfNextDay,
+  getISTDayRange,
+  getISTWeekday,
+} = require("../utils/dateFormatter");
 
 // Store last mentioned task for "this" references
 
@@ -44,85 +50,139 @@ async function findReminderByTitle(title) {
   return reminder;
 }
 
+// services/dataFetcher.js - Update extractEntityName function
+
 function extractEntityName(message) {
   let cleaned = cleanMessage(message);
 
   console.log(`🔍 Cleaning message: "${message}"`);
   console.log(`   After cleanMessage: "${cleaned}"`);
 
-  let match = message.match(/reminder named\s+["']?([^"']+?)["']?/i);
+  // ============================================
+  // Handle "tasks associated with the note X"
+  // ============================================
+  // ✅ Fix: Use [\w_]+ to include underscores, and match until end of line or punctuation
+  let match = message.match(
+    /tasks? associated with the note\s+["']?([\w_]+(?:[\s\w_]*?))(?:\s|\.|\?|$)/i,
+  );
   if (match) {
-    console.log(`🎯 Extracted reminder name: "${match[1].trim()}"`);
-    return match[1].trim();
+    let noteName = match[1].trim();
+    // Remove trailing punctuation
+    noteName = noteName.replace(/[.!?]+$/, "");
+    console.log(`🎯 Extracted note name from association: "${noteName}"`);
+    return noteName;
   }
 
-  // ✅ NEW: Handle "update the reminder X"
-  match = message.match(/update the reminder\s+["']?([^"']+?)["']?(?: to|$)/i);
+  // Handle "tasks associated with the reminder X"
+  match = message.match(
+    /tasks? associated with the reminder\s+["']?([\w_]+(?:[\s\w_]*?))(?:\s|\.|\?|$)/i,
+  );
   if (match) {
-    console.log(`🎯 Extracted reminder name: "${match[1].trim()}"`);
-    return match[1].trim();
+    let reminderName = match[1].trim();
+    reminderName = reminderName.replace(/[.!?]+$/, "");
+    console.log(
+      `🎯 Extracted reminder name from association: "${reminderName}"`,
+    );
+    return reminderName;
   }
+
+  // Handle "show note X" or "note X details"
+  match = message.match(
+    /show (?:the )?note\s+["']?([\w_]+(?:[\s\w_]*?))(?:\s|\.|\?|$)/i,
+  );
+  if (match) {
+    let noteName = match[1].trim();
+    noteName = noteName.replace(/[.!?]+$/, "");
+    console.log(`🎯 Extracted note name: "${noteName}"`);
+    return noteName;
+  }
+
+  // Handle "reminder named X" (existing)
+  match = message.match(
+    /reminder named\s+["']?([\w_]+(?:[\s\w_]*?))(?:\s|\.|\?|$)/i,
+  );
+  if (match) {
+    let reminderName = match[1].trim();
+    reminderName = reminderName.replace(/[.!?]+$/, "");
+    console.log(`🎯 Extracted reminder name: "${reminderName}"`);
+    return reminderName;
+  }
+
+  // Handle "update the reminder X"
+  match = message.match(
+    /update the reminder\s+["']?([\w_]+(?:[\s\w_]*?))(?:\s+to|\s*$)/i,
+  );
+  if (match) {
+    let reminderName = match[1].trim();
+    reminderName = reminderName.replace(/[.!?]+$/, "");
+    console.log(`🎯 Extracted reminder name: "${reminderName}"`);
+    return reminderName;
+  }
+
   // Handle "this task" reference
   if (
     cleaned.includes("this task") ||
     message.toLowerCase().includes("show this task") ||
     message.toLowerCase().includes("details of this task") ||
-    message.toLowerCase().includes("show the same")
+    message.toLowerCase().includes("show the same") ||
+    message.toLowerCase().includes("show in table")
   ) {
     console.log("🔍 Detected 'this task' reference");
     return "THIS_TASK_REFERENCE";
   }
 
-  // ============================================
-  // NEW: Extract task title from create/update commands
-  // ============================================
-
   // Pattern for "set a task [title] with due [date]"
-  match = message.match(/set a task (.+?)(?: with due| with priority|$)/i);
+  match = message.match(
+    /set a task\s+["']?([\w_]+(?:[\s\w_]*?))(?:\s+with|\s+due|\s+priority|$)/i,
+  );
   if (match) {
     let title = match[1].trim();
-    // Remove trailing words like "with", "due", "priority"
     title = title.replace(/\s+(with|due|priority).*$/i, "");
     console.log(`🎯 Extracted task title from "set a task": "${title}"`);
     return title;
   }
 
-  // ✅ NEW: Handle "show the details of [task name]"
-  match = message.match(/details? of (?:the )?task ["']?([^"']+?)["']?/i);
-  if (match) {
-    console.log(`🎯 Extracted task from "details of": "${match[1].trim()}"`);
-    return match[1].trim();
-  }
-
-  // ✅ NEW: Handle "show [task name] in table"
+  // Pattern for "show the details of [task name]"
   match = message.match(
-    /show (?:the )?["']?([^"']+?)["']? (?:task )?in table/i,
+    /details? of (?:the )?task\s+["']?([\w_]+(?:[\s\w_]*?))(?:\s|\.|\?|$)/i,
   );
   if (match) {
-    console.log(`🎯 Extracted task from "show in table": "${match[1].trim()}"`);
-    return match[1].trim();
+    let taskName = match[1].trim();
+    taskName = taskName.replace(/[.!?]+$/, "");
+    console.log(`🎯 Extracted task from "details of": "${taskName}"`);
+    return taskName;
   }
 
-  // ✅ NEW: Handle "show me [task name]"
-  match = message.match(/show me (?:the )?["']?([^"']+?)["']?(?: task)?/i);
+  // Pattern for "show [task name] in table"
+  match = message.match(
+    /show (?:the )?["']?([\w_]+(?:[\s\w_]*?))["']?\s+(?:task\s+)?in table/i,
+  );
+  if (match) {
+    let taskName = match[1].trim();
+    taskName = taskName.replace(/[.!?]+$/, "");
+    console.log(`🎯 Extracted task from "show in table": "${taskName}"`);
+    return taskName;
+  }
+
+  // Pattern for "show me [task name]"
+  match = message.match(
+    /show me (?:the )?["']?([\w_]+(?:[\s\w_]*?))["']?(?:\s+task)?/i,
+  );
   if (
     match &&
     !match[1].toLowerCase().includes("all") &&
     !match[1].toLowerCase().includes("table")
   ) {
-    console.log(`🎯 Extracted task from "show me": "${match[1].trim()}"`);
-    return match[1].trim();
+    let taskName = match[1].trim();
+    taskName = taskName.replace(/[.!?]+$/, "");
+    console.log(`🎯 Extracted task from "show me": "${taskName}"`);
+    return taskName;
   }
-  // Pattern for "set a task [title] with due [date]"
-  match = message.match(/set a task (.+?)(?: with due| with priority|$)/i);
-  if (match) {
-    let title = match[1].trim();
-    title = title.replace(/\s+(with|due|priority).*$/i, "");
-    console.log(`🎯 Extracted task title from "set a task": "${title}"`);
-    return title;
-  }
+
   // Pattern for "create task [title]"
-  match = message.match(/create task (.+?)(?: with due| with priority|$)/i);
+  match = message.match(
+    /create task\s+["']?([\w_]+(?:[\s\w_]*?))(?:\s+with|\s+due|$)/i,
+  );
   if (match) {
     let title = match[1].trim();
     title = title.replace(/\s+(with|due|priority).*$/i, "");
@@ -131,7 +191,9 @@ function extractEntityName(message) {
   }
 
   // Pattern for "add task [title]"
-  match = message.match(/add task (.+?)(?: with due| with priority|$)/i);
+  match = message.match(
+    /add task\s+["']?([\w_]+(?:[\s\w_]*?))(?:\s+with|\s+due|$)/i,
+  );
   if (match) {
     let title = match[1].trim();
     title = title.replace(/\s+(with|due|priority).*$/i, "");
@@ -141,20 +203,22 @@ function extractEntityName(message) {
 
   // Pattern for "update [title]" or "update its [title]"
   match = message.match(
-    /update (?:its|the|task)?\s*["']?([^"']+?)["']?(?: to| with|$)/i,
+    /update (?:its|the|task)?\s*["']?([\w_]+(?:[\s\w_]*?))["']?(?:\s+to|\s+with|$)/i,
   );
   if (
     match &&
     !match[1].toLowerCase().includes("due") &&
     !match[1].toLowerCase().includes("priority")
   ) {
-    console.log(`🎯 Extracted task title from update: "${match[1].trim()}"`);
-    return match[1].trim();
+    let taskName = match[1].trim();
+    taskName = taskName.replace(/[.!?]+$/, "");
+    console.log(`🎯 Extracted task title from update: "${taskName}"`);
+    return taskName;
   }
 
   // Remove common command words for simple extraction
   cleaned = cleaned.replace(
-    /\b(give|update|due|delete|show|tell|its|display|same|list|which|are|pending|with|fetch|details?|of|the|in|as|tabular|form|table|format|for|me|please|what|is|content|tasks?|reminders?|notes?|memo|everything|related|associated|linked|to|set|a|create|add)\b/g,
+    /\b(give|delete|show|priority|tell|its|display|same|list|which|are|pending|with|fetch|details?|of|the|in|as|tabular|form|table|format|for|me|please|what|is|content|tasks?|reminders?|notes?|memo|everything|related|associated|linked|to|set|a|create|add)\b/g,
     "",
   );
 
@@ -164,7 +228,6 @@ function extractEntityName(message) {
 
   // If what's left is too long, it might still have date info
   if (cleaned.length > 30) {
-    // Try to extract just the first few words as title
     const words = cleaned.split(" ");
     if (words.length > 3) {
       cleaned = words.slice(0, 3).join(" ");
@@ -173,6 +236,112 @@ function extractEntityName(message) {
 
   console.log(`🎯 Extracted entity: "${cleaned}"`);
   return cleaned;
+}
+/**
+ * Get recently created tasks
+ * @param {number} limit - Number of tasks to return
+ * @returns {Promise<Array>} - Recently created tasks
+ */
+async function getRecentTasks(limit = 5) {
+  try {
+    const tasks = await Task.find().sort({ createdAt: -1 }).limit(limit);
+
+    // Fetch dependencies
+    const tasksWithDeps = await Promise.all(
+      tasks.map(async (task) => {
+        const reminder = task.reminderId
+          ? await Reminder.findById(task.reminderId)
+          : null;
+        const note = task.noteId ? await Note.findById(task.noteId) : null;
+        return { ...task.toObject(), reminder, note };
+      }),
+    );
+
+    console.log(`📋 Found ${tasksWithDeps.length} recent tasks`);
+    return tasksWithDeps;
+  } catch (error) {
+    console.error("Error fetching recent tasks:", error);
+    return [];
+  }
+}
+
+/**
+ * Get recently created reminders
+ * @param {number} limit - Number of reminders to return
+ * @returns {Promise<Array>} - Recently created reminders
+ */
+/**
+ * Get recently created reminders
+ * @param {number} limit - Number of reminders to return
+ * @returns {Promise<Array>} - Recently created reminders
+ */
+async function getRecentReminders(limit = 5) {
+  try {
+    const reminders = await Reminder.find()
+      .sort({ createdAt: -1 }) // Sort by newest first
+      .limit(limit);
+
+    // Fetch linked tasks
+    const remindersWithTasks = await Promise.all(
+      reminders.map(async (reminder) => {
+        const task = reminder.taskId
+          ? await Task.findById(reminder.taskId)
+          : null;
+        return {
+          ...reminder.toObject(),
+          linkedTask: task,
+          createdAt: reminder.createdAt, // Ensure createdAt is included
+          updatedAt: reminder.updatedAt,
+        };
+      }),
+    );
+
+    console.log(`⏰ Found ${remindersWithTasks.length} recent reminders`);
+    return remindersWithTasks;
+  } catch (error) {
+    console.error("Error fetching recent reminders:", error);
+    return [];
+  }
+}
+
+/**
+ * Get recently created notes
+ * @param {number} limit - Number of notes to return
+ * @returns {Promise<Array>} - Recently created notes
+ */
+async function getRecentNotes(limit = 5) {
+  try {
+    const notes = await Note.find().sort({ createdAt: -1 }).limit(limit);
+
+    // Fetch linked tasks
+    const notesWithTasks = await Promise.all(
+      notes.map(async (note) => {
+        const task = note.taskId ? await Task.findById(note.taskId) : null;
+        return { ...note.toObject(), linkedTask: task };
+      }),
+    );
+
+    console.log(`📝 Found ${notesWithTasks.length} recent notes`);
+    return notesWithTasks;
+  } catch (error) {
+    console.error("Error fetching recent notes:", error);
+    return [];
+  }
+}
+
+/**
+ * Get all recently created items (tasks, reminders, notes)
+ * @param {number} limit - Limit per type
+ * @returns {Promise<Object>} - Recent items grouped by type
+ */
+async function getAllRecentItems(limit = 5) {
+  const [tasks, reminders, notes] = await Promise.all([
+    getRecentTasks(limit),
+    getRecentReminders(limit),
+    getRecentNotes(limit),
+  ]);
+
+  return { tasks, reminders, notes };
 }
 /**
  * List tasks with filtering options
@@ -195,39 +364,36 @@ async function listTasks(filters = {}) {
   // ============================================
   // CRITICAL: Only include future tasks
   // ============================================
-  const now = new Date();
-  now.setHours(0, 0, 0, 0); // Start of today
+  const istTodayStart = getISTStartOfDay();
 
   // Build the date condition properly
   const dateCondition = [];
 
-  // Include tasks with due date >= today
-  dateCondition.push({ dueDate: { $gte: now } });
+  // Include tasks with due date >= start of today (IST)
+  dateCondition.push({ dueDate: { $gte: istTodayStart } });
 
   // Include tasks with no due date
   dateCondition.push({ dueDate: null });
 
-  // If there's a specific due date filter, apply it
+  // If there's a specific due date filter, apply it (IST calendar boundaries → UTC)
   if (filters.dueDate) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
     if (filters.dueDate === "today") {
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      query.dueDate = { $gte: today, $lt: tomorrow };
-      delete query.$or; // Remove the default $or when specific filter is applied
+      const { start, end } = getISTDayRange();
+      query.dueDate = { $gte: start, $lt: end };
+      delete query.$or;
     } else if (filters.dueDate === "tomorrow") {
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const dayAfter = new Date(tomorrow);
-      dayAfter.setDate(dayAfter.getDate() + 1);
-      query.dueDate = { $gte: tomorrow, $lt: dayAfter };
+      const tomorrowStart = getISTStartOfNextDay();
+      const dayAfter = new Date(tomorrowStart.getTime() + 24 * 60 * 60 * 1000);
+      query.dueDate = { $gte: tomorrowStart, $lt: dayAfter };
       delete query.$or;
     } else if (filters.dueDate === "this-week") {
-      const endOfWeek = new Date(today);
-      endOfWeek.setDate(today.getDate() + (7 - today.getDay()));
-      query.dueDate = { $gte: today, $lte: endOfWeek };
+      const { start } = getISTDayRange();
+      const endOfWeek = new Date(start);
+      const istWeekday = getISTWeekday();
+      endOfWeek.setTime(
+        start.getTime() + (7 - istWeekday) * 24 * 60 * 60 * 1000,
+      );
+      query.dueDate = { $gte: start, $lte: endOfWeek };
       delete query.$or;
     }
   } else {
@@ -303,38 +469,42 @@ async function listTasks(filters = {}) {
 async function listReminders(filters = {}) {
   let query = {};
 
-  // ============================================
-  // CRITICAL: Only include future reminders
-  // ============================================
   const now = new Date();
 
-  // Default: only reminders with remindAt >= current time
-  if (!filters.remindAt) {
-    query.remindAt = { $gte: now };
-  }
-
-  // Filter by date
+  // Filter by date (IST calendar boundaries)
   if (filters.remindAt) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const filterValue = filters.remindAt.toLowerCase();
 
-    if (filters.remindAt === "today") {
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      query.remindAt = { $gte: today, $lt: tomorrow };
-    } else if (filters.remindAt === "tomorrow") {
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const dayAfter = new Date(tomorrow);
-      dayAfter.setDate(dayAfter.getDate() + 1);
-      query.remindAt = { $gte: tomorrow, $lt: dayAfter };
-    } else if (filters.remindAt === "upcoming") {
+    if (filterValue === "today") {
+      const { start, end } = getISTDayRange();
+      query.remindAt = { $gte: start, $lt: end };
+    } else if (filterValue === "tomorrow") {
+      const tomorrowStart = getISTStartOfNextDay();
+      const dayAfter = new Date(tomorrowStart.getTime() + 24 * 60 * 60 * 1000);
+      query.remindAt = { $gte: tomorrowStart, $lt: dayAfter };
+    } else if (filterValue === "upcoming") {
       query.remindAt = { $gte: now };
-    } else if (filters.remindAt === "this-week") {
+    } else if (filterValue === "this week" || filterValue === "this-week") {
+      // ✅ Handle both "this week" and "this-week"
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
       const endOfWeek = new Date(today);
-      endOfWeek.setDate(today.getDate() + (7 - today.getDay()));
-      query.remindAt = { $gte: now, $lte: endOfWeek };
+      endOfWeek.setDate(today.getDate() + 7);
+      endOfWeek.setHours(23, 59, 59, 999);
+
+      console.log(
+        `📅 This week range: ${today.toISOString()} to ${endOfWeek.toISOString()}`,
+      );
+
+      query.remindAt = {
+        $gte: today,
+        $lte: endOfWeek,
+      };
     }
+  } else {
+    // Default: only future reminders
+    query.remindAt = { $gte: now };
   }
 
   // Filter by linked status
@@ -349,7 +519,7 @@ async function listReminders(filters = {}) {
     query.title = { $regex: new RegExp(filters.search, "i") };
   }
 
-  const limit = filters.limit || 50;
+  const limit = filters.limit || 100;
 
   console.log("⏰ Query:", JSON.stringify(query, null, 2));
 
@@ -368,7 +538,7 @@ async function listReminders(filters = {}) {
     }),
   );
 
-  console.log(`⏰ Found ${remindersWithTasks.length} future reminders`);
+  console.log(`⏰ Found ${remindersWithTasks.length} reminders`);
   return remindersWithTasks;
 }
 /**
@@ -540,11 +710,73 @@ async function fetchRelevantData(userMessage) {
   let context = { tasks: [], notes: [], reminders: [] };
 
   let extractedName = extractEntityName(message);
-
   console.log("🎯 Extracted entity:", extractedName);
-  // In dataFetcher.js - fetchRelevantData function
 
+  // ============================================
+  // Handle "tasks associated with the note X"
+  // ============================================
+  if (message.includes("associated with the note")) {
+    if (extractedName && extractedName !== "THIS_TASK_REFERENCE") {
+      console.log(`🔍 Finding task by note title: "${extractedName}"`);
+
+      // Import the function
+      const { getTaskByNoteTitle } = require("./autoCreateService");
+      const result = await getTaskByNoteTitle(extractedName);
+
+      if (result && result.task) {
+        context.tasks = [result.task];
+        if (result.reminder) context.reminders = [result.reminder];
+        if (result.note) context.notes = [result.note];
+        console.log(
+          `✅ Found task "${result.task.title}" linked to note "${extractedName}"`,
+        );
+
+        // ✅ CRITICAL: Set as last mentioned task
+        setLastMentionedTask(result.task.title, result.task._id);
+        console.log(
+          `📌 Set last mentioned task to: "${result.task.title}" (from note association)`,
+        );
+
+        return context;
+      } else {
+        console.log(`❌ No task found linked to note "${extractedName}"`);
+      }
+    }
+  }
+
+  // ============================================
+  // Handle "tasks associated with the reminder X"
+  // ============================================
+  if (message.includes("associated with the reminder")) {
+    if (extractedName && extractedName !== "THIS_TASK_REFERENCE") {
+      console.log(`🔍 Finding task by reminder title: "${extractedName}"`);
+
+      // Import the function
+      const { getTaskByReminderTitle } = require("./autoCreateService");
+      const result = await getTaskByReminderTitle(extractedName);
+
+      if (result && result.task) {
+        context.tasks = [result.task];
+        if (result.reminder) context.reminders = [result.reminder];
+        if (result.note) context.notes = [result.note];
+        console.log(
+          `✅ Found task "${result.task.title}" linked to reminder "${extractedName}"`,
+        );
+        // ✅ CRITICAL: Set as last mentioned task
+        setLastMentionedTask(result.task.title, result.task._id);
+        console.log(
+          `📌 Set last mentioned task to: "${result.task.title}" (from reminder association)`,
+        );
+        return context;
+      } else {
+        console.log(`❌ No task found linked to reminder "${extractedName}"`);
+      }
+    }
+  }
+
+  // ============================================
   // Handle "the same" reference
+  // ============================================
   if (
     message.includes("the same") ||
     message.includes("same task") ||
@@ -557,45 +789,105 @@ async function fetchRelevantData(userMessage) {
 
     if (lastMentionedTaskId) {
       console.log(`🔄 Using same task reference: "${lastMentionedTask}"`);
-      const task = await Task.findById(lastMentionedTaskId);
-      if (task) {
-        console.log(`✅ Found task: "${task.title}"`);
-        context.tasks = [task];
-        if (task.reminderId) {
-          const reminder = await Reminder.findById(task.reminderId);
-          if (reminder) context.reminders = [reminder];
-        }
-        if (task.noteId) {
-          const note = await Note.findById(task.noteId);
-          if (note) context.notes = [note];
-        }
+      const { getTaskWithDependencies } = require("./autoCreateService");
+      const result = await getTaskWithDependencies(lastMentionedTaskId);
+
+      if (result && result.task) {
+        context.tasks = [result.task];
+        if (result.reminder) context.reminders = [result.reminder];
+        if (result.note) context.notes = [result.note];
+        console.log(`✅ Found task: "${result.task.title}" with dependencies`);
         return context;
-      } else {
-        console.log(`❌ Task not found for ID: ${lastMentionedTaskId}`);
       }
     } else {
       console.log(`⚠️ 'Same' detected but no last mentioned task exists`);
     }
   }
-  // ✅ Handle "this task" reference
+
+  // ============================================
+  // Handle "this task" reference
+  // ============================================
   if (extractedName === "THIS_TASK_REFERENCE" && lastMentionedTaskId) {
     console.log(`🔄 Using last mentioned task: "${lastMentionedTask}"`);
-    let task = await Task.findById(lastMentionedTaskId);
-    if (task) {
-      context.tasks = [task];
-      if (task.reminderId) {
-        let reminder = await Reminder.findById(task.reminderId);
-        if (reminder) context.reminders = [reminder];
-      }
-      if (task.noteId) {
-        let note = await Note.findById(task.noteId);
-        if (note) context.notes = [note];
-      }
+    const { getTaskWithDependencies } = require("./autoCreateService");
+    const result = await getTaskWithDependencies(lastMentionedTaskId);
+
+    if (result && result.task) {
+      context.tasks = [result.task];
+      if (result.reminder) context.reminders = [result.reminder];
+      if (result.note) context.notes = [result.note];
+      console.log(`✅ Found task: "${result.task.title}" with dependencies`);
       return context;
     }
   }
 
-  // Normal entity search
+  // ============================================
+  // Handle "show note X" or "note X details"
+  // ============================================
+  if (
+    message.includes("note") &&
+    extractedName &&
+    extractedName !== "THIS_TASK_REFERENCE" &&
+    !message.includes("associated")
+  ) {
+    console.log(`🔍 Finding note: "${extractedName}"`);
+
+    const note = await Note.findOne({
+      title: { $regex: new RegExp(`^${extractedName}$`, "i") },
+    });
+
+    if (note) {
+      context.notes = [note];
+      if (note.taskId) {
+        const { getTaskWithDependencies } = require("./autoCreateService");
+        const result = await getTaskWithDependencies(note.taskId);
+        if (result && result.task) {
+          context.tasks = [result.task];
+          if (result.reminder) context.reminders = [result.reminder];
+        }
+      }
+      console.log(
+        `✅ Found note "${extractedName}"${note.taskId ? " with linked task" : ""}`,
+      );
+      return context;
+    }
+  }
+
+  // ============================================
+  // Handle "show reminder X"
+  // ============================================
+  if (
+    message.includes("reminder") &&
+    extractedName &&
+    extractedName !== "THIS_TASK_REFERENCE" &&
+    !message.includes("associated")
+  ) {
+    console.log(`🔍 Finding reminder: "${extractedName}"`);
+
+    const reminder = await Reminder.findOne({
+      title: { $regex: new RegExp(`^${extractedName}$`, "i") },
+    });
+
+    if (reminder) {
+      context.reminders = [reminder];
+      if (reminder.taskId) {
+        const { getTaskWithDependencies } = require("./autoCreateService");
+        const result = await getTaskWithDependencies(reminder.taskId);
+        if (result && result.task) {
+          context.tasks = [result.task];
+          if (result.note) context.notes = [result.note];
+        }
+      }
+      console.log(
+        `✅ Found reminder "${extractedName}"${reminder.taskId ? " with linked task" : ""}`,
+      );
+      return context;
+    }
+  }
+
+  // ============================================
+  // Normal entity search (for tasks)
+  // ============================================
   if (
     extractedName &&
     extractedName !== "THIS_TASK_REFERENCE" &&
@@ -604,7 +896,7 @@ async function fetchRelevantData(userMessage) {
     extractedName.length > 2
   ) {
     let task = await Task.findOne({
-      title: { $regex: extractedName, $options: "i" },
+      title: { $regex: new RegExp(`^${extractedName}$`, "i") },
     });
 
     if (!task) {
@@ -615,50 +907,32 @@ async function fetchRelevantData(userMessage) {
 
     if (task) {
       console.log(`✅ Found specific task: "${task.title}"`);
-      context.tasks = [task];
+      const { getTaskWithDependencies } = require("./autoCreateService");
+      const result = await getTaskWithDependencies(task._id);
 
-      if (task.reminderId) {
-        let reminder = await Reminder.findById(task.reminderId);
-        if (reminder) context.reminders = [reminder];
+      if (result && result.task) {
+        context.tasks = [result.task];
+        if (result.reminder) context.reminders = [result.reminder];
+        if (result.note) context.notes = [result.note];
       }
-
-      if (task.noteId) {
-        let note = await Note.findById(task.noteId);
-        if (note) context.notes = [note];
-      }
-
-      return context; // ✅ Return early with just this task
+      return context;
     }
   }
 
-  // If not asking about a specific task, fetch all
-  /*if (
-    message.includes("task") ||
-    message.includes("todo") ||
-    message.includes("list")
-  ) {
-    context.tasks = await Task.find().sort({ dueDate: 1 });
-  }
-
-  if (message.includes("reminder") || message.includes("remind")) {
-    context.reminders = await Reminder.find().sort({ remindAt: 1 });
-  }
-
-  if (message.includes("note") || message.includes("memo")) {
-    context.notes = await Note.find().sort({ createdAt: -1 });
-  }*/
+  // ============================================
+  // List request detection
+  // ============================================
   const isListRequest =
     message.includes("list all") ||
     (message.includes("list") && message.includes("tasks") && !extractedName);
 
   if (isListRequest) {
     console.log("📋 List request detected");
-    return context; // Return empty, AI should use LIST action
+    return context;
   }
+
   return context;
 }
-
-// services/dataFetcher.js
 
 function formatContextForAI(context) {
   // Build complete but concise context
@@ -749,4 +1023,8 @@ module.exports = {
   parseFiltersFromMessage,
   handleListRequest,
   findReminderByTitle,
+  getRecentTasks,
+  getRecentReminders,
+  getRecentNotes,
+  getAllRecentItems,
 };

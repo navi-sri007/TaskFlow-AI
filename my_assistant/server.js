@@ -1,4 +1,5 @@
 // server.js
+process.env.TZ = "Asia/Kolkata";
 require("dotenv").config();
 const mongoose = require("mongoose");
 const express = require("express");
@@ -20,11 +21,18 @@ const {
   fetchRelevantData,
   formatContextForAI,
   setLastMentionedTask,
+  getLastMentionedTask,
+  getLastMentionedTaskId,
   listTasks,
   listReminders,
   listNotes,
   parseFiltersFromMessage,
   handleListRequest,
+  findReminderByTitle,
+  getRecentTasks,
+  getRecentReminders,
+  getRecentNotes,
+  getAllRecentItems,
 } = require("./services/dataFetcher");
 const { parseDate, testDateParser } = require("./services/dateParser");
 const {
@@ -36,8 +44,94 @@ const {
   getNoteWithDependenciesById,
   searchAllByKeyword,
 } = require("./services/autoCreateService.js");
-const { formatISTDate } = require("./utils/dateFormatter.js");
+const {
+  formatISTDate,
+  getISTDateParts,
+  istToUTC,
+  getISTStartOfNextDay,
+} = require("./utils/dateFormatter.js");
 
+// Add these helper functions to server.js
+
+function formatRecentTasksTable(tasks) {
+  if (!tasks || tasks.length === 0) {
+    return "📋 No recent tasks found.";
+  }
+
+  let table = "| Task Title | Priority | Due Date | Status | Created |\n";
+  table += "|------------|----------|----------|--------|---------|\n";
+
+  for (const task of tasks) {
+    const dueDate = task.dueDate ? formatISTDate(task.dueDate) : "No date";
+    const status = task.completed ? "✅ Done" : "⏳ Pending";
+    const created = formatISTDate(task.createdAt);
+    table += `| ${task.title} | ${task.priority} | ${dueDate} | ${status} | ${created} |\n`;
+  }
+
+  return `📋 **Recently Created Tasks** (Last ${tasks.length}):\n\n${table}`;
+}
+
+function formatRecentRemindersTable(reminders) {
+  if (!reminders || reminders.length === 0) {
+    return "⏰ No recent reminders found.";
+  }
+
+  let table = "| Reminder Title | Reminder Time | Linked Task | Created |\n";
+  table += "|----------------|---------------|-------------|---------|\n";
+
+  for (const reminder of reminders) {
+    const time = formatISTDate(reminder.remindAt);
+    const linkedTask = reminder.linkedTask
+      ? reminder.linkedTask.title
+      : "Standalone";
+    const created = formatISTDate(reminder.createdAt);
+    table += `| ${reminder.title} | ${time} | ${linkedTask} | ${created} |\n`;
+  }
+
+  return `⏰ **Recently Created Reminders** (Last ${reminders.length}):\n\n${table}`;
+}
+
+function formatRecentNotesTable(notes) {
+  if (!notes || notes.length === 0) {
+    return "📝 No recent notes found.";
+  }
+
+  let table = "| Note Title | Content Preview | Linked Task | Created |\n";
+  table += "|------------|----------------|-------------|---------|\n";
+
+  for (const note of notes) {
+    const preview = note.content
+      ? note.content.substring(0, 50) + "..."
+      : "Empty";
+    const linkedTask = note.linkedTask ? note.linkedTask.title : "Standalone";
+    const created = formatISTDate(note.createdAt);
+    table += `| ${note.title} | ${preview} | ${linkedTask} | ${created} |\n`;
+  }
+
+  return `📝 **Recently Created Notes** (Last ${notes.length}):\n\n${table}`;
+}
+
+function formatRecentAllTable(recent) {
+  let output = "";
+
+  if (recent.tasks && recent.tasks.length > 0) {
+    output += formatRecentTasksTable(recent.tasks) + "\n\n";
+  }
+
+  if (recent.reminders && recent.reminders.length > 0) {
+    output += formatRecentRemindersTable(recent.reminders) + "\n\n";
+  }
+
+  if (recent.notes && recent.notes.length > 0) {
+    output += formatRecentNotesTable(recent.notes);
+  }
+
+  if (!output) {
+    output = "No recent items found.";
+  }
+
+  return output;
+}
 // Helper function to format tasks as table
 function formatTaskListAsTable(tasks, filters = {}) {
   if (!tasks || tasks.length === 0) return "No tasks found.";
@@ -238,10 +332,33 @@ app.get("/api/reminders", async (req, res) => {
   }
 });
 
+// Create reminder (datetime-local values treated as IST → stored UTC)
+app.post("/api/reminders", async (req, res) => {
+  try {
+    const body = { ...req.body };
+    if (body.remindAt && typeof body.remindAt === "string") {
+      body.remindAt = await parseDate(body.remindAt.replace("T", " "));
+    }
+    const reminder = new Reminder(body);
+    const saved = await reminder.save();
+    res.json(saved);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Create task
 app.post("/api/tasks", async (req, res) => {
   try {
-    const task = new Task(req.body);
+    const body = { ...req.body };
+    if (body.dueDate && typeof body.dueDate === "string") {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(body.dueDate)) {
+        body.dueDate = await parseDate(`${body.dueDate} 9am`);
+      } else {
+        body.dueDate = await parseDate(body.dueDate.replace("T", " "));
+      }
+    }
+    const task = new Task(body);
     const savedTask = await task.save();
     const result = await autoCreateDependencies(savedTask);
     res.json(result);
@@ -289,6 +406,7 @@ app.post("/api/chat", async (req, res) => {
 
     // 3. Handle actions from AI
     if (action) {
+      console.log(`🤖 AI Action Detected: ${action.type}`);
       switch (action.type) {
         case "CREATE_TASK":
           console.log(`📝 Creating task:`);
@@ -363,7 +481,7 @@ app.post("/api/chat", async (req, res) => {
 
           createdItem = savedTask;
           actionResult = savedTask;
-          finalReply = successMessage;
+          finalReply = successMessage.trim();
           break;
         case "LIST_TASKS":
           if (relevantData.tasks && relevantData.tasks.length === 1) {
@@ -459,22 +577,16 @@ app.post("/api/chat", async (req, res) => {
           const reminderFilters = {};
           if (action.filter) {
             const filterLower = action.filter.toLowerCase();
-            if (filterLower.includes("today"))
+            if (filterLower.includes("today")) {
               reminderFilters.remindAt = "today";
-            if (filterLower.includes("tomorrow"))
+            } else if (filterLower.includes("tomorrow")) {
               reminderFilters.remindAt = "tomorrow";
-            if (filterLower.includes("upcoming"))
+            } else if (filterLower.includes("this week")) {
+              reminderFilters.remindAt = "this week"; // Keep as "this week" with space
+            } else if (filterLower.includes("upcoming")) {
               reminderFilters.remindAt = "upcoming";
-            if (filterLower.includes("past") || filterLower.includes("missed"))
-              reminderFilters.remindAt = "past";
-            if (filterLower.includes("linked")) reminderFilters.linked = true;
-            if (
-              filterLower.includes("unlinked") ||
-              filterLower.includes("standalone")
-            )
-              reminderFilters.linked = false;
+            }
           }
-
           const listedReminders = await listReminders(reminderFilters);
 
           if (listedReminders.length === 0) {
@@ -523,9 +635,9 @@ app.post("/api/chat", async (req, res) => {
                 const parsedTime = await parseDate(action.newValue);
 
                 if (parsedTime) {
-                  newDueDate.setHours(
-                    parsedTime.getHours(),
-                    parsedTime.getMinutes(),
+                  newDueDate.setUTCHours(
+                    parsedTime.getUTCHours(),
+                    parsedTime.getUTCMinutes(),
                     0,
                     0,
                   );
@@ -548,12 +660,13 @@ app.post("/api/chat", async (req, res) => {
                 let changeType = "date and time";
 
                 if (oldDueDate) {
-                  const oldDatePart = oldDueDate.toDateString();
-                  const newDatePart = newDueDate.toDateString();
+                  const oldP = getISTDateParts(oldDueDate);
+                  const newP = getISTDateParts(newDueDate);
+                  const oldDatePart = `${oldP.year}-${oldP.month}-${oldP.day}`;
+                  const newDatePart = `${newP.year}-${newP.month}-${newP.day}`;
 
-                  const oldTimePart = `${oldDueDate.getHours()}:${oldDueDate.getMinutes()}`;
-
-                  const newTimePart = `${newDueDate.getHours()}:${newDueDate.getMinutes()}`;
+                  const oldTimePart = `${oldP.hour}:${oldP.minute}`;
+                  const newTimePart = `${newP.hour}:${newP.minute}`;
 
                   const dateChanged = oldDatePart !== newDatePart;
                   const timeChanged = oldTimePart !== newTimePart;
@@ -579,7 +692,7 @@ app.post("/api/chat", async (req, res) => {
                   oldDueDate,
                 });
 
-                finalReply = `✅ Task "${action.searchQuery}" ${changeType} updated to ${newDueDate.toLocaleString()}`;
+                finalReply = `✅ Task "${action.searchQuery}" ${changeType} updated to ${formatISTDate(newDueDate)}`;
 
                 if (taskToUpdate.reminderId) {
                   finalReply += `\n⏰ Linked reminder updated automatically.`;
@@ -673,7 +786,31 @@ app.post("/api/chat", async (req, res) => {
           actionResult = taskToUpdate;
 
           break;
+        // Add these cases to the action switch in server.js
 
+        case "RECENT_TASKS":
+          console.log(`📋 Getting recent tasks (limit: ${action.limit})`);
+          const recentTasks = await getRecentTasks(action.limit);
+          finalReply = formatRecentTasksTable(recentTasks);
+          break;
+
+        case "RECENT_REMINDERS":
+          console.log(`⏰ Getting recent reminders (limit: ${action.limit})`);
+          const recentReminders = await getRecentReminders(action.limit);
+          finalReply = formatRecentRemindersTable(recentReminders);
+          break;
+
+        case "RECENT_NOTES":
+          console.log(`📝 Getting recent notes (limit: ${action.limit})`);
+          const recentNotes = await getRecentNotes(action.limit);
+          finalReply = formatRecentNotesTable(recentNotes);
+          break;
+
+        case "RECENT_ALL":
+          console.log(`📋 Getting all recent items (limit: ${action.limit})`);
+          const allRecent = await getAllRecentItems(action.limit);
+          finalReply = formatRecentAllTable(allRecent);
+          break;
         case "DELETE_TASK":
           console.log(
             `🗑️ DELETE_TASK action received: "${action.searchQuery}"`,
@@ -927,9 +1064,9 @@ app.post("/api/chat", async (req, res) => {
           }
 
           if (!remindAt) {
-            remindAt = new Date();
-            remindAt.setDate(remindAt.getDate() + 1);
-            remindAt.setHours(9, 0, 0, 0);
+            const tomorrow = getISTStartOfNextDay();
+            const p = getISTDateParts(tomorrow);
+            remindAt = istToUTC(p.year, p.month, p.day, 9, 0, 0);
           }
 
           const reminder = new Reminder({
@@ -939,7 +1076,7 @@ app.post("/api/chat", async (req, res) => {
 
           createdItem = await reminder.save();
           actionResult = reminder;
-          finalReply = `✅ Reminder "${action.title}" set for ${remindAt.toLocaleString()}!`;
+          finalReply = `✅ Reminder "${action.title}" set for ${formatISTDate(remindAt)}!`;
           break;
       }
     }

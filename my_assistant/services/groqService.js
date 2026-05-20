@@ -36,9 +36,9 @@ FOR SINGLE REMINDER (with linked task details):
 | Call mom | 2026-05-20 09:00 AM | Call mom | Completed|
 
 FOR SINGLE NOTE (with linked task details):
-| Note Title | Note Content | Linked Task | Task Priority | Task Due Date |
-|------------|--------------|-------------|---------------|---------------|
-| Meeting notes | Discuss budget | Client meeting | High | 2026-05-22 |
+| Note Title  | Linked Task | Task Priority | Task Due Date |
+|------------|-------------|---------------|---------------|
+| Meeting notes | Client meeting | High | 2026-05-22 |
 
 FOR MULTIPLE TASKS:
 | Task Title | Priority | Due Date | Status | Reminder Time | Note Preview |
@@ -280,7 +280,42 @@ Examples:
 User: "show Engagement in table"
 → (Context contains only Engagement task)
 → Display with Engagement's details
+// Add to system prompt
 
+**RECENT ITEMS COMMANDS:**
+
+RECENT_TASKS|limit - Show recently created tasks
+RECENT_REMINDERS|limit - Show recently created reminders  
+RECENT_NOTES|limit - Show recently created notes
+RECENT_ALL|limit - Show all recently created items
+
+Examples:
+User: "show recently set tasks"
+→ ACTION: RECENT_TASKS|5
+
+User: "what reminders did I recently create"
+→ ACTION: RECENT_REMINDERS|5
+
+User: "show me recent notes"
+→ ACTION: RECENT_NOTES|5
+
+User: "show everything I recently created"
+→ ACTION: RECENT_ALL|5
+
+The limit is optional. Default is 5.
+
+**CREATE TASK RESPONSE FORMAT (EXACT):**
+DONT GIVE ANY RESPONSE OTHER THAN ACTION : CREAT_TASK
+NEVER REPLY ANYTHING 
+
+**CRITICAL - TASK TITLE RULES:**
+- The task title is EXACTLY what the user says after "set a task"
+- DO NOT add the word "Task" to the title
+- DO NOT modify the title unless it's a typo
+
+Examples:
+User: "set a task preparation with due next day"
+→ Title: "preparation" (NOT "Task preparation")
 
 FINAL INSTRUCTION:
 Generate the best possible response using:
@@ -360,35 +395,30 @@ function extractAction(response) {
     return cleaned.trim();
   }
 
-  // ✅ CHECK: If response contains a table or task details, don't extract action
-  if (
-    response.includes("| Task Title |") ||
-    (response.includes("Task Title") && response.includes("Priority"))
-  ) {
-    console.log("📋 Response already contains table, no action needed");
-    return null;
-  }
-
   // ✅ Check for LIST_TASKS - but verify it's not a false positive
+  // Check for LIST_TASKS action
   if (response.includes("ACTION: LIST_TASKS")) {
-    // Make sure the AI isn't hallucinating LIST_TASKS when it has the data
     const match = response.match(/ACTION: LIST_TASKS(?:\|(.+))?/);
-    console.log("⚠️ AI wants to use LIST_TASKS");
+    let filter = match?.[1] || "all";
+
+    // Clean up the filter
+    if (filter) {
+      filter = filter.toLowerCase().trim();
+      // Map natural language to simple filters
+      if (filter.includes("pending")) filter = "pending";
+      if (filter.includes("high")) filter = "high";
+      if (filter.includes("medium")) filter = "medium";
+      if (filter.includes("low")) filter = "low";
+      if (filter.includes("completed")) filter = "completed";
+    }
+
+    console.log(`📋 LIST_TASKS action extracted with filter: "${filter}"`);
     return {
       type: "LIST_TASKS",
-      filter: match?.[1] || "all",
+      filter: filter,
     };
   }
 
-  // Check for UPDATE_TASK action (MUST BE FIRST to avoid being caught by CREATE patterns)
-  if (response.includes("ACTION: LIST_TASKS")) {
-    const match = response.match(/ACTION: LIST_TASKS(?:\|(.+))?/);
-    console.log("Listingtasks");
-    return {
-      type: "LIST_TASKS",
-      filter: match?.[1] || null,
-    };
-  }
   // Check for LIST_NOTES action
   if (response.includes("ACTION: LIST_NOTES")) {
     const match = response.match(/ACTION: LIST_NOTES(?:\|(.+))?/);
@@ -404,6 +434,47 @@ function extractAction(response) {
     return {
       type: "LIST_REMINDERS",
       filter: match?.[1] || null,
+    };
+  }
+  // Add these to extractAction function
+
+  // Check for RECENT_TASKS action
+  if (response.includes("ACTION: RECENT_TASKS")) {
+    const match = response.match(/ACTION: RECENT_TASKS(?:\|(\d+))?/);
+    const limit = match?.[1] ? parseInt(match[1]) : 5;
+    return {
+      type: "RECENT_TASKS",
+      limit: limit,
+    };
+  }
+
+  // Check for RECENT_REMINDERS action
+  if (response.includes("ACTION: RECENT_REMINDERS")) {
+    const match = response.match(/ACTION: RECENT_REMINDERS(?:\|(\d+))?/);
+    const limit = match?.[1] ? parseInt(match[1]) : 5;
+    return {
+      type: "RECENT_REMINDERS",
+      limit: limit,
+    };
+  }
+
+  // Check for RECENT_NOTES action
+  if (response.includes("ACTION: RECENT_NOTES")) {
+    const match = response.match(/ACTION: RECENT_NOTES(?:\|(\d+))?/);
+    const limit = match?.[1] ? parseInt(match[1]) : 5;
+    return {
+      type: "RECENT_NOTES",
+      limit: limit,
+    };
+  }
+
+  // Check for RECENT_ALL action
+  if (response.includes("ACTION: RECENT_ALL")) {
+    const match = response.match(/ACTION: RECENT_ALL(?:\|(\d+))?/);
+    const limit = match?.[1] ? parseInt(match[1]) : 5;
+    return {
+      type: "RECENT_ALL",
+      limit: limit,
     };
   }
   if (response.includes("ACTION: UPDATE_TASK")) {

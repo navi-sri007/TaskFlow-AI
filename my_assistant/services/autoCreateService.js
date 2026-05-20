@@ -1,7 +1,12 @@
 const Task = require("../models/Task");
 const Reminder = require("../models/Reminder");
 const Note = require("../models/Note");
-const { formatISTDate } = require("../utils/dateFormatter");
+const {
+  formatISTDate,
+  getISTDateParts,
+  istToUTC,
+} = require("../utils/dateFormatter");
+
 /**
  * Auto-create reminder and note for a task
  * @param {Object} task - The created task object
@@ -21,10 +26,22 @@ async function autoCreateDependencies(task, hasExplicitTime = false) {
       const reminderDate = new Date(task.dueDate);
 
       if (hasExplicitTime) {
-        // User gave a specific time, keep that time
         console.log(`  ⏰ Using user-specified time: ${reminderDate}`);
       } else {
-        reminderDate.setHours(9, 0, 0, 0);
+        const utcDate = new Date(task.dueDate);
+
+        // Convert UTC to IST by adding 5:30 to get the correct date
+        const istDate = new Date(utcDate.getTime() + 5.5 * 60 * 60 * 1000);
+
+        // Set to 9 AM IST
+        istDate.setHours(9, 0, 0, 0);
+
+        // Convert back to UTC for storage
+        reminderDate.setTime(istDate.getTime() - 5.5 * 60 * 60 * 1000);
+
+        console.log(
+          `  ⏰ Default time (9 AM IST) set to UTC: ${reminderDate.toISOString()}`,
+        );
       }
       console.log(`  ⏰ Reminder will be set for: ${reminderDate}`);
       const reminderTitle = `${task.title}`;
@@ -66,7 +83,6 @@ async function autoCreateDependencies(task, hasExplicitTime = false) {
       task.noteId = noteId;
     }
 
-    // THIS IS THE KEY LINE - MUST BE HERE
     await task.save();
     console.log(
       `  ✅ Task updated with foreign keys - reminderId: ${reminderId}, noteId: ${noteId}`,
@@ -111,12 +127,13 @@ async function updateDependencies(task, updates, previousValues = {}) {
       let changeType = "datetime";
 
       if (oldDate) {
-        const oldDatePart = oldDate.toDateString();
-        const newDatePart = newDate.toDateString();
+        const oldP = getISTDateParts(oldDate);
+        const newP = getISTDateParts(newDate);
+        const oldDatePart = `${oldP.year}-${oldP.month}-${oldP.day}`;
+        const newDatePart = `${newP.year}-${newP.month}-${newP.day}`;
 
-        const oldTimePart = `${oldDate.getHours()}:${oldDate.getMinutes()}`;
-
-        const newTimePart = `${newDate.getHours()}:${newDate.getMinutes()}`;
+        const oldTimePart = `${oldP.hour}:${oldP.minute}`;
+        const newTimePart = `${newP.hour}:${newP.minute}`;
 
         const dateChanged = oldDatePart !== newDatePart;
         const timeChanged = oldTimePart !== newTimePart;
@@ -130,25 +147,18 @@ async function updateDependencies(task, updates, previousValues = {}) {
         }
       }
 
-      // =====================================
       // UPDATE EXISTING REMINDER
-      // =====================================
       if (task.reminderId) {
         const reminder = await Reminder.findById(task.reminderId);
 
         if (reminder) {
           reminder.remindAt = task.dueDate;
           reminder.title = task.title;
-
           await reminder.save();
-
           console.log(`  ✅ Reminder ${changeType} updated successfully`);
         }
       }
-
-      // =====================================
       // CREATE REMINDER IF NOT EXISTS
-      // =====================================
       else {
         const reminder = new Reminder({
           title: task.title,
@@ -158,14 +168,11 @@ async function updateDependencies(task, updates, previousValues = {}) {
         });
 
         const savedReminder = await reminder.save();
-
         task.reminderId = savedReminder._id;
         await task.save();
-
         console.log(`  ✅ New reminder created`);
       }
 
-      // Save change type for reply
       updates.changeType = changeType;
     }
 
@@ -173,26 +180,20 @@ async function updateDependencies(task, updates, previousValues = {}) {
     // TITLE UPDATE
     // ================================
     if (updates.title) {
-      // Update Reminder Title
       if (task.reminderId) {
         const reminder = await Reminder.findById(task.reminderId);
-
         if (reminder) {
           reminder.title = task.title;
           await reminder.save();
-
           console.log(`  ✅ Reminder title updated`);
         }
       }
 
-      // Update Note Title
       if (task.noteId) {
         const note = await Note.findById(task.noteId);
-
         if (note) {
           note.title = task.title;
           await note.save();
-
           console.log(`  ✅ Note title updated`);
         }
       }
@@ -203,11 +204,6 @@ async function updateDependencies(task, updates, previousValues = {}) {
     console.error(`❌ Error updating dependencies:`, error);
   }
 }
-/**
- * Delete dependencies when task is deleted
- * @param {string} taskId - Task ID
- */
-// services/autoCreateServices.js
 
 /**
  * Delete dependencies when task is deleted
@@ -217,24 +213,19 @@ async function deleteDependencies(taskId) {
   try {
     console.log(`🔄 Deleting dependencies for task ID: ${taskId}`);
 
-    // First, find the task to get reminderId and noteId
     const task = await Task.findById(taskId);
 
     if (task) {
-      // If task has reminderId, delete that specific reminder
       if (task.reminderId) {
         await Reminder.findByIdAndDelete(task.reminderId);
         console.log(`  ✅ Deleted reminder: ${task.reminderId}`);
       }
-
-      // If task has noteId, delete that specific note
       if (task.noteId) {
         await Note.findByIdAndDelete(task.noteId);
         console.log(`  ✅ Deleted note: ${task.noteId}`);
       }
     }
 
-    // Fallback: delete all dependencies with this taskId (cleanup any orphans)
     const reminderResult = await Reminder.deleteMany({ taskId: taskId });
     const noteResult = await Note.deleteMany({ taskId: taskId });
 
@@ -255,6 +246,7 @@ async function deleteDependencies(taskId) {
     return { remindersDeleted: 0, notesDeleted: 0, error: error.message };
   }
 }
+
 /**
  * Get a task with all its dependencies
  * @param {string} taskId - Task ID
@@ -269,18 +261,15 @@ async function getTaskWithDependencies(taskId) {
       : null;
     const note = task.noteId ? await Note.findById(task.noteId) : null;
 
-    return {
-      task,
-      reminder,
-      note,
-    };
+    return { task, reminder, note };
   } catch (error) {
     console.error(`❌ Error fetching task with dependencies:`, error);
     return null;
   }
 }
+
 /**
- * Get reminder with its task and note using reminder ID (not title)
+ * Get reminder with its task and note using reminder ID
  * @param {string} reminderId - Reminder ObjectId
  */
 async function getReminderWithDependenciesById(reminderId) {
@@ -299,7 +288,7 @@ async function getReminderWithDependenciesById(reminderId) {
 }
 
 /**
- * Get note with its task and reminder using note ID (not title)
+ * Get note with its task and reminder using note ID
  * @param {string} noteId - Note ObjectId
  */
 async function getNoteWithDependenciesById(noteId) {
@@ -320,20 +309,139 @@ async function getNoteWithDependenciesById(noteId) {
 }
 
 /**
- * Search all by keyword - returns task, its reminder, and note together
+ * Get task by note title (find task linked to a note by note title)
+ * @param {string} noteTitle - Note title
+ * @returns {Promise<Object>} - Task with dependencies
  */
+async function getTaskByNoteTitle(noteTitle) {
+  try {
+    console.log(`🔍 Searching for note with title: "${noteTitle}"`);
+
+    let note = await Note.findOne({
+      title: { $regex: new RegExp(`^${noteTitle}$`, "i") },
+    });
+
+    if (!note) {
+      console.log(`  ⚠️ Exact match not found, trying partial match...`);
+      note = await Note.findOne({
+        title: { $regex: new RegExp(noteTitle, "i") },
+      });
+    }
+
+    if (!note && noteTitle.includes("_")) {
+      const withoutUnderscore = noteTitle.replace(/_/g, " ");
+      console.log(`  🔍 Trying without underscore: "${withoutUnderscore}"`);
+      note = await Note.findOne({
+        title: { $regex: new RegExp(`^${withoutUnderscore}$`, "i") },
+      });
+    }
+
+    if (!note && noteTitle.includes(" ")) {
+      const withUnderscore = noteTitle.replace(/ /g, "_");
+      console.log(`  🔍 Trying with underscore: "${withUnderscore}"`);
+      note = await Note.findOne({
+        title: { $regex: new RegExp(`^${withUnderscore}$`, "i") },
+      });
+    }
+
+    if (!note) {
+      console.log(`  ❌ No note found matching "${noteTitle}"`);
+      return null;
+    }
+
+    console.log(`  ✅ Found note: "${note.title}"`);
+
+    if (!note.taskId) {
+      console.log(`  ⚠️ Note "${note.title}" has no linked task`);
+      return null;
+    }
+
+    return await getTaskWithDependencies(note.taskId);
+  } catch (error) {
+    console.error(`❌ Error fetching task by note title:`, error);
+    return null;
+  }
+}
+
 /**
- * Search by keyword - returns task with its reminder and note using IDs
+ * Get task by reminder title (find task linked to a reminder by reminder title)
+ * @param {string} reminderTitle - Reminder title
+ * @returns {Promise<Object>} - Task with dependencies
+ */
+async function getTaskByReminderTitle(reminderTitle) {
+  try {
+    console.log(`🔍 Searching for reminder with title: "${reminderTitle}"`);
+
+    let reminder = await Reminder.findOne({
+      title: { $regex: new RegExp(`^${reminderTitle}$`, "i") },
+    });
+
+    if (!reminder) {
+      console.log(`  ⚠️ Exact match not found, trying partial match...`);
+      reminder = await Reminder.findOne({
+        title: { $regex: new RegExp(reminderTitle, "i") },
+      });
+    }
+
+    if (!reminder) {
+      console.log(`  ❌ No reminder found matching "${reminderTitle}"`);
+      return null;
+    }
+
+    console.log(`  ✅ Found reminder: "${reminder.title}"`);
+
+    if (!reminder.taskId) {
+      console.log(`  ⚠️ Reminder "${reminder.title}" has no linked task`);
+      return null;
+    }
+
+    return await getTaskWithDependencies(reminder.taskId);
+  } catch (error) {
+    console.error(`❌ Error fetching task by reminder title:`, error);
+    return null;
+  }
+}
+
+/**
+ * Get task by note ID (find task linked to a note)
+ * @param {string} noteId - Note ID
+ */
+async function getTaskByNoteId(noteId) {
+  try {
+    const note = await Note.findById(noteId);
+    if (!note || !note.taskId) return null;
+    return await getTaskWithDependencies(note.taskId);
+  } catch (error) {
+    console.error(`❌ Error fetching task by note ID:`, error);
+    return null;
+  }
+}
+
+/**
+ * Get task by reminder ID (find task linked to a reminder)
+ * @param {string} reminderId - Reminder ID
+ */
+async function getTaskByReminderId(reminderId) {
+  try {
+    const reminder = await Reminder.findById(reminderId);
+    if (!reminder || !reminder.taskId) return null;
+    return await getTaskWithDependencies(reminder.taskId);
+  } catch (error) {
+    console.error(`❌ Error fetching task by reminder ID:`, error);
+    return null;
+  }
+}
+
+/**
+ * Search all by keyword - returns task, its reminder, and note together
  */
 async function searchAllByKeyword(keyword) {
   try {
-    // First find task by title
     let task = await Task.findOne({
       title: { $regex: new RegExp(keyword, "i") },
     });
 
     if (task) {
-      // Use ID-based lookup (not title-based)
       const reminder = task.reminderId
         ? await Reminder.findById(task.reminderId)
         : null;
@@ -341,13 +449,11 @@ async function searchAllByKeyword(keyword) {
       return { type: "task", data: { task, reminder, note } };
     }
 
-    // Then find reminder by title
     let reminder = await Reminder.findOne({
       title: { $regex: new RegExp(keyword, "i") },
     });
 
     if (reminder) {
-      // Use ID-based lookup
       const task = reminder.taskId
         ? await Task.findById(reminder.taskId)
         : null;
@@ -355,13 +461,11 @@ async function searchAllByKeyword(keyword) {
       return { type: "reminder", data: { reminder, task, note } };
     }
 
-    // Then find note by title
     let note = await Note.findOne({
       title: { $regex: new RegExp(keyword, "i") },
     });
 
     if (note) {
-      // Use ID-based lookup
       const task = note.taskId ? await Task.findById(note.taskId) : null;
       const reminder = task?.reminderId
         ? await Reminder.findById(task.reminderId)
@@ -375,6 +479,7 @@ async function searchAllByKeyword(keyword) {
     return null;
   }
 }
+
 module.exports = {
   autoCreateDependencies,
   updateDependencies,
@@ -383,4 +488,8 @@ module.exports = {
   getReminderWithDependenciesById,
   getNoteWithDependenciesById,
   searchAllByKeyword,
+  getTaskByNoteId,
+  getTaskByReminderId,
+  getTaskByNoteTitle,
+  getTaskByReminderTitle,
 };

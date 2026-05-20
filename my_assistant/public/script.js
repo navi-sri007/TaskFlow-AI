@@ -1,3 +1,17 @@
+// Format UTC ISO dates from API as IST for display
+function formatISTDate(date) {
+  if (!date) return "No date";
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  }).format(new Date(date));
+}
+
 // ========== TAB SWITCHING ==========
 function switchTab(tabName) {
   // Hide all tabs
@@ -71,7 +85,7 @@ async function loadTasks() {
             <div class="item-card">
                 <strong>${task.title}</strong><br>
                 📌 Priority: ${task.priority}<br>
-                ${task.dueDate ? `📅 Due: ${new Date(task.dueDate).toDateString()}` : "⏰ No due date"}
+                ${task.dueDate ? `📅 Due: ${formatISTDate(task.dueDate)}` : "⏰ No due date"}
             </div>
         `,
       )
@@ -124,7 +138,7 @@ async function loadNotes() {
             <div class="item-card">
                 <strong>${note.title}</strong><br>
                 ${note.content.substring(0, 100)}${note.content.length > 100 ? "..." : ""}<br>
-                <small>📅 ${new Date(note.createdAt).toLocaleString()}</small>
+                <small>📅 ${formatISTDate(note.createdAt)}</small>
             </div>
         `,
       )
@@ -178,7 +192,7 @@ async function loadReminders() {
         (reminder) => `
             <div class="item-card">
                 <strong>${reminder.title}</strong><br>
-                ⏰ ${reminder.remindAt ? new Date(reminder.remindAt).toLocaleString() : "No time set"}
+                ⏰ ${reminder.remindAt ? formatISTDate(reminder.remindAt) : "No time set"}
             </div>
         `,
       )
@@ -319,13 +333,13 @@ async function searchRelated(keyword) {
     // Task details
     message += `**Task:** ${data.task.title}\n`;
     message += `📌 Priority: ${data.task.priority}\n`;
-    message += `📅 Due: ${data.task.dueDate ? new Date(data.task.dueDate).toLocaleDateString() : "No due date"}\n`;
+    message += `📅 Due: ${data.task.dueDate ? formatISTDate(data.task.dueDate) : "No due date"}\n`;
     message += `✅ Status: ${data.task.completed ? "Completed" : "Pending"}\n\n`;
 
     // Reminder details
     if (data.reminder) {
       message += `**⏰ Reminder:** ${data.reminder.title}\n`;
-      message += `   At: ${new Date(data.reminder.remindAt).toLocaleString()}\n\n`;
+      message += `   At: ${formatISTDate(data.reminder.remindAt)}\n\n`;
     } else {
       message += `**⏰ Reminder:** Not set\n\n`;
     }
