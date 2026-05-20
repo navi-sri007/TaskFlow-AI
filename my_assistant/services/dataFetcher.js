@@ -218,7 +218,7 @@ function extractEntityName(message) {
 
   // Remove common command words for simple extraction
   cleaned = cleaned.replace(
-    /\b(give|delete|show|priority|tell|its|display|same|list|which|are|pending|with|fetch|details?|of|the|in|as|tabular|form|table|format|for|me|please|what|is|content|tasks?|reminders?|notes?|memo|everything|related|associated|linked|to|set|a|create|add)\b/g,
+    /\b(give|delete|show|priority|tell|its|display|same|list|which|is|completed|are|pending|with|fetch|details?|of|the|in|as|tabular|form|table|format|for|me|please|what|is|content|tasks?|reminders?|notes?|memo|details|of|reminder|note|everything|related|associated|linked|to|set|a|create|add)\b/g,
     "",
   );
 
@@ -375,18 +375,53 @@ async function listTasks(filters = {}) {
   // Include tasks with no due date
   dateCondition.push({ dueDate: null });
 
-  // If there's a specific due date filter, apply it (IST calendar boundaries → UTC)
   if (filters.dueDate) {
-    if (filters.dueDate === "today") {
+    const filterValue = filters.dueDate.toLowerCase();
+
+    // TODAY filter
+    if (filterValue === "today") {
       const { start, end } = getISTDayRange();
       query.dueDate = { $gte: start, $lt: end };
       delete query.$or;
-    } else if (filters.dueDate === "tomorrow") {
+    }
+    // TOMORROW filter
+    else if (filterValue === "tomorrow") {
       const tomorrowStart = getISTStartOfNextDay();
       const dayAfter = new Date(tomorrowStart.getTime() + 24 * 60 * 60 * 1000);
       query.dueDate = { $gte: tomorrowStart, $lt: dayAfter };
       delete query.$or;
-    } else if (filters.dueDate === "this-week") {
+    }
+    // DAY AFTER TOMORROW filter (NEW)
+    else if (
+      filterValue === "day after tomorrow" ||
+      filterValue === "day-after-tomorrow"
+    ) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      // Calculate day after tomorrow
+      const dayAfterTomorrow = new Date(today);
+      dayAfterTomorrow.setDate(today.getDate() + 2);
+      dayAfterTomorrow.setHours(0, 0, 0, 0);
+
+      const nextDay = new Date(dayAfterTomorrow);
+      nextDay.setDate(dayAfterTomorrow.getDate() + 1);
+      nextDay.setHours(0, 0, 0, 0);
+
+      // Convert to UTC for query
+      const startUTC = new Date(
+        dayAfterTomorrow.getTime() - 5.5 * 60 * 60 * 1000,
+      );
+      const endUTC = new Date(nextDay.getTime() - 5.5 * 60 * 60 * 1000);
+
+      query.dueDate = { $gte: startUTC, $lt: endUTC };
+      delete query.$or;
+      console.log(
+        `📅 Day after tomorrow filter: ${startUTC.toISOString()} to ${endUTC.toISOString()}`,
+      );
+    }
+    // THIS WEEK filter
+    else if (filterValue === "this-week") {
       const { start } = getISTDayRange();
       const endOfWeek = new Date(start);
       const istWeekday = getISTWeekday();
@@ -395,6 +430,60 @@ async function listTasks(filters = {}) {
       );
       query.dueDate = { $gte: start, $lte: endOfWeek };
       delete query.$or;
+    }
+    // NEXT WEEK filter
+    else if (filterValue === "next-week") {
+      const { start } = getISTDayRange();
+      const nextWeekStart = new Date(start);
+      nextWeekStart.setDate(start.getDate() + 7);
+      const nextWeekEnd = new Date(nextWeekStart);
+      nextWeekEnd.setDate(nextWeekStart.getDate() + 6);
+      nextWeekEnd.setHours(23, 59, 59, 999);
+      query.dueDate = { $gte: nextWeekStart, $lte: nextWeekEnd };
+      delete query.$or;
+    }
+    // NEXT MONTH filter
+    else if (filterValue === "next-month") {
+      const { start } = getISTDayRange();
+      const nextMonthStart = new Date(start);
+      nextMonthStart.setMonth(start.getMonth() + 1);
+      nextMonthStart.setDate(1);
+      const nextMonthEnd = new Date(nextMonthStart);
+      nextMonthEnd.setMonth(nextMonthStart.getMonth() + 1);
+      nextMonthEnd.setDate(0);
+      nextMonthEnd.setHours(23, 59, 59, 999);
+      query.dueDate = { $gte: nextMonthStart, $lte: nextMonthEnd };
+      delete query.$or;
+    }
+    // OVERDUE filter (tasks due before today, not completed)
+    else if (filterValue === "overdue") {
+      const todayStart = getISTStartOfDay();
+      query.dueDate = { $lt: todayStart };
+      query.completed = false;
+      delete query.$or;
+    }
+    // EXACT DATE filter (e.g., "2026-05-25", "25th may", "may 25 2026")
+    else {
+      // Try to parse as exact date
+      const exactDate = await parseDate(filterValue);
+      if (exactDate) {
+        // Get start and end of that day in IST
+        const dateStart = new Date(exactDate);
+        dateStart.setHours(0, 0, 0, 0);
+        const dateEnd = new Date(dateStart);
+        dateEnd.setDate(dateStart.getDate() + 1);
+        dateEnd.setHours(0, 0, 0, 0);
+
+        // Convert to UTC for query
+        const startUTC = new Date(dateStart.getTime() - 5.5 * 60 * 60 * 1000);
+        const endUTC = new Date(dateEnd.getTime() - 5.5 * 60 * 60 * 1000);
+
+        query.dueDate = { $gte: startUTC, $lt: endUTC };
+        delete query.$or;
+        console.log(
+          `📅 Exact date filter: ${filterValue} → ${startUTC.toISOString()} to ${endUTC.toISOString()}`,
+        );
+      }
     }
   } else {
     // Apply the default future-only filter
@@ -459,6 +548,160 @@ async function listTasks(filters = {}) {
     `📋 Found ${tasksWithDeps.length} future tasks (due today or later)`,
   );
   return tasksWithDeps;
+}
+
+/**
+ * Get complete dashboard statistics
+ * @returns {Promise<Object>} - Dashboard statistics
+ */
+async function getDashboardStats() {
+  try {
+    const now = new Date();
+    const todayStart = getISTStartOfDay();
+    const weekAgo = new Date();
+    weekAgo.setDate(weekAgo.getDate() - 7);
+
+    // Task statistics
+    const totalTasks = await Task.countDocuments();
+    const pendingTasks = await Task.countDocuments({ completed: false });
+    const completedTasks = await Task.countDocuments({ completed: true });
+    const overdueTasks = await Task.countDocuments({
+      dueDate: { $lt: todayStart },
+      completed: false,
+    });
+    const dueTodayTasks = await Task.countDocuments({
+      dueDate: {
+        $gte: todayStart,
+        $lt: new Date(todayStart.getTime() + 24 * 60 * 60 * 1000),
+      },
+      completed: false,
+    });
+
+    // Priority wise tasks
+    const highPriorityTasks = await Task.countDocuments({
+      priority: "high",
+      completed: false,
+    });
+    const mediumPriorityTasks = await Task.countDocuments({
+      priority: "medium",
+      completed: false,
+    });
+    const lowPriorityTasks = await Task.countDocuments({
+      priority: "low",
+      completed: false,
+    });
+    const importantTasks = await Task.countDocuments({
+      priority: "important",
+      completed: false,
+    });
+
+    // Reminder statistics
+    const totalReminders = await Reminder.countDocuments();
+    const upcomingReminders = await Reminder.countDocuments({
+      remindAt: { $gte: now },
+    });
+    const remindersToday = await Reminder.countDocuments({
+      remindAt: {
+        $gte: todayStart,
+        $lt: new Date(todayStart.getTime() + 24 * 60 * 60 * 1000),
+      },
+    });
+
+    // Note statistics
+    const totalNotes = await Note.countDocuments();
+    const notesWithTasks = await Note.countDocuments({ taskId: { $ne: null } });
+    const standaloneNotes = await Note.countDocuments({ taskId: null });
+
+    // Recent activity (last 7 days)
+    const tasksCreatedLastWeek = await Task.countDocuments({
+      createdAt: { $gte: weekAgo },
+    });
+    const remindersCreatedLastWeek = await Reminder.countDocuments({
+      createdAt: { $gte: weekAgo },
+    });
+    const notesCreatedLastWeek = await Note.countDocuments({
+      createdAt: { $gte: weekAgo },
+    });
+
+    return {
+      tasks: {
+        total: totalTasks,
+        pending: pendingTasks,
+        completed: completedTasks,
+        overdue: overdueTasks,
+        dueToday: dueTodayTasks,
+        byPriority: {
+          high: highPriorityTasks,
+          medium: mediumPriorityTasks,
+          low: lowPriorityTasks,
+          important: importantTasks,
+        },
+      },
+      reminders: {
+        total: totalReminders,
+        upcoming: upcomingReminders,
+        today: remindersToday,
+      },
+      notes: {
+        total: totalNotes,
+        linkedToTasks: notesWithTasks,
+        standalone: standaloneNotes,
+      },
+      recentActivity: {
+        tasksCreated: tasksCreatedLastWeek,
+        remindersCreated: remindersCreatedLastWeek,
+        notesCreated: notesCreatedLastWeek,
+      },
+    };
+  } catch (error) {
+    console.error("Error fetching dashboard stats:", error);
+    return null;
+  }
+}
+
+/**
+ * Get quick overview for dashboard
+ * @returns {Promise<Object>} - Quick overview
+ */
+async function getQuickOverview() {
+  try {
+    const todayStart = getISTStartOfDay();
+    const now = new Date();
+
+    const [
+      pendingTasks,
+      overdueTasks,
+      dueToday,
+      upcomingReminders,
+      recentNotes,
+    ] = await Promise.all([
+      Task.countDocuments({ completed: false }),
+      Task.countDocuments({ dueDate: { $lt: todayStart }, completed: false }),
+      Task.countDocuments({
+        dueDate: {
+          $gte: todayStart,
+          $lt: new Date(todayStart.getTime() + 24 * 60 * 60 * 1000),
+        },
+        completed: false,
+      }),
+      Reminder.countDocuments({ remindAt: { $gte: now } }),
+      Note.find().sort({ createdAt: -1 }).limit(5),
+    ]);
+
+    return {
+      pendingTasks,
+      overdueTasks,
+      dueToday,
+      upcomingReminders,
+      recentNotes: recentNotes.map((n) => ({
+        title: n.title,
+        createdAt: n.createdAt,
+      })),
+    };
+  } catch (error) {
+    console.error("Error fetching quick overview:", error);
+    return null;
+  }
 }
 
 /**
@@ -642,8 +885,34 @@ function parseFiltersFromMessage(message) {
     filters.dueDate = "today";
   } else if (lowerMsg.includes("tomorrow")) {
     filters.dueDate = "tomorrow";
+  } else if (
+    lowerMsg.includes("day after tomorrow") ||
+    lowerMsg.includes("day after tmr")
+  ) {
+    filters.dueDate = "day after tomorrow";
   } else if (lowerMsg.includes("this week")) {
     filters.dueDate = "this-week";
+  } else if (lowerMsg.includes("next week")) {
+    filters.dueDate = "next-week";
+  } else if (lowerMsg.includes("next month")) {
+    filters.dueDate = "next-month";
+  } else {
+    // Check for exact date patterns
+    const datePatterns = [
+      /(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i,
+      /(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2})(?:st|nd|rd|th)?/i,
+      /(\d{4})-(\d{2})-(\d{2})/,
+      /(\d{1,2})\/(\d{1,2})\/(\d{4})/,
+    ];
+
+    for (const pattern of datePatterns) {
+      const match = message.match(pattern);
+      if (match) {
+        filters.dueDate = match[0];
+        console.log(`📅 Detected exact date filter: "${filters.dueDate}"`);
+        break;
+      }
+    }
   }
 
   // Search term (extract quoted text or last words)
@@ -715,7 +984,10 @@ async function fetchRelevantData(userMessage) {
   // ============================================
   // Handle "tasks associated with the note X"
   // ============================================
-  if (message.includes("associated with the note")) {
+  if (
+    message.includes("associated with the note") ||
+    (message.includes("show the details") && message.includes("note"))
+  ) {
     if (extractedName && extractedName !== "THIS_TASK_REFERENCE") {
       console.log(`🔍 Finding task by note title: "${extractedName}"`);
 
@@ -933,7 +1205,105 @@ async function fetchRelevantData(userMessage) {
 
   return context;
 }
+/**
+ * Get a single note by title with its linked task
+ * @param {string} noteTitle - Title of the note
+ * @returns {Promise<Object>} - Note with linked task and reminder
+ */
+async function getNoteByTitle(noteTitle) {
+  try {
+    console.log(`🔍 Searching for note: "${noteTitle}"`);
 
+    // Try exact match first
+    let note = await Note.findOne({
+      title: { $regex: new RegExp(`^${noteTitle}$`, "i") },
+    });
+
+    // Try partial match if exact fails
+    if (!note) {
+      note = await Note.findOne({
+        title: { $regex: new RegExp(noteTitle, "i") },
+      });
+    }
+
+    if (!note) {
+      console.log(`❌ Note "${noteTitle}" not found`);
+      return null;
+    }
+
+    console.log(`✅ Found note: "${note.title}"`);
+
+    // Get linked task if exists
+    let linkedTask = null;
+    let linkedReminder = null;
+
+    if (note.taskId) {
+      linkedTask = await Task.findById(note.taskId);
+      if (linkedTask && linkedTask.reminderId) {
+        linkedReminder = await Reminder.findById(linkedTask.reminderId);
+      }
+    }
+
+    return {
+      note,
+      linkedTask,
+      linkedReminder,
+    };
+  } catch (error) {
+    console.error(`❌ Error fetching note:`, error);
+    return null;
+  }
+}
+
+/**
+ * Get a single reminder by title with its linked task
+ * @param {string} reminderTitle - Title of the reminder
+ * @returns {Promise<Object>} - Reminder with linked task and note
+ */
+async function getReminderByTitle(reminderTitle) {
+  try {
+    console.log(`🔍 Searching for reminder: "${reminderTitle}"`);
+
+    // Try exact match first
+    let reminder = await Reminder.findOne({
+      title: { $regex: new RegExp(`^${reminderTitle}$`, "i") },
+    });
+
+    // Try partial match if exact fails
+    if (!reminder) {
+      reminder = await Reminder.findOne({
+        title: { $regex: new RegExp(reminderTitle, "i") },
+      });
+    }
+
+    if (!reminder) {
+      console.log(`❌ Reminder "${reminderTitle}" not found`);
+      return null;
+    }
+
+    console.log(`✅ Found reminder: "${reminder.title}"`);
+
+    // Get linked task if exists
+    let linkedTask = null;
+    let linkedNote = null;
+
+    if (reminder.taskId) {
+      linkedTask = await Task.findById(reminder.taskId);
+      if (linkedTask && linkedTask.noteId) {
+        linkedNote = await Note.findById(linkedTask.noteId);
+      }
+    }
+
+    return {
+      reminder,
+      linkedTask,
+      linkedNote,
+    };
+  } catch (error) {
+    console.error(`❌ Error fetching reminder:`, error);
+    return null;
+  }
+}
 function formatContextForAI(context) {
   // Build complete but concise context
   let output = "";
@@ -1010,6 +1380,14 @@ function formatContextForAI(context) {
   );
   return output;
 }
+/**
+ * Get productivity statistics with time-based analysis
+ * @returns {Promise<Object>} - Productivity statistics
+ */
+
+/**
+ * Get week number from date
+ */
 
 module.exports = {
   fetchRelevantData,
@@ -1027,4 +1405,8 @@ module.exports = {
   getRecentReminders,
   getRecentNotes,
   getAllRecentItems,
+  getNoteByTitle,
+  getReminderByTitle,
+  getQuickOverview,
+  getDashboardStats,
 };

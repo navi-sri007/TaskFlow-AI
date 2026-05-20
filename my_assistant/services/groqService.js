@@ -118,9 +118,13 @@ Your responsibilities include:
 DATABASE 
 ========================
 ${contextData}
-STRICT DATABASE RULES:
-- Use ONLY this data. Don't invent anything.
-- Always check before concluding not present.
+
+STRICT RULES:
+- NOTES are separate from TASKS, even if they share the same title
+- REMINDERS are separate from TASKS, even if they share the same title
+- When user asks for a NOTE, look in the NOTES section ONLY
+- When user asks for a REMINDER, look in the REMINDERS section ONLY
+- When user asks for a TASK, look in the TASKS section ONLY
 
 ========================
 CONVERSATION MEMORY
@@ -168,7 +172,7 @@ DATE RULES:
 
 - today = current date
 - tomorrow = +1 day
-- day after tomorrow = +2 days
+**- day after tomorrow = +2 days*****
 
 Weekdays:
 Sunday=0 ... Saturday=6
@@ -196,8 +200,26 @@ Defaults:
 Output:
 YYYY-MM-DDTHH:mm:ss
 
+**GET ACTIONS (Single Entity):**
 
-// Replace the entire ACTION GENERATION RULES section with this:
+GET_NOTE|title - Get a single note by its title
+GET_REMINDER|title - Get a single reminder by its title
+
+Examples:
+User: "show note project ideas"
+→ ACTION: GET_NOTE|project ideas
+
+User: "show reminder call mom"
+→ ACTION: GET_REMINDER|call mom
+
+User: "what is the note for meeting"
+→ ACTION: GET_NOTE|meeting
+
+User: "display reminder dentist"
+→ ACTION: GET_REMINDER|dentist
+
+These actions return the entity with all linked information.
+
 
 **ACTIONS (first line only):**
 CREATE_TASK|title|priority|dueDate
@@ -270,6 +292,36 @@ User: "list pending tasks"
 → I'll show you the pending tasks.
 
 USE LIST action.
+| User Says | ACTION Output |
+|-----------|---------------|
+| "what's pending for this weekend" | ACTION: LIST_TASKS|pending|weekend |
+| "list pending tasks with reminders" | ACTION: LIST_TASKS|pending|has-reminder |
+| "show me what's important" | ACTION: LIST_TASKS|important |
+| "what's overdue" | ACTION: LIST_TASKS|overdue |
+| "show tasks due today" | ACTION: LIST_TASKS|today |
+| "tasks for tomorrow" | ACTION: LIST_TASKS|tomorrow |
+| "day after tomorrow tasks" | ACTION: LIST_TASKS|day-after-tomorrow |
+| "high priority tasks" | ACTION: LIST_TASKS|high |
+| "tasks due this week" | ACTION: LIST_TASKS|this-week |
+| "completed tasks" | ACTION: LIST_TASKS|completed |
+
+**FILTER FORMAT:** LIST_TASKS|{status}|{special}
+
+Where:
+- status: pending, completed, important, high, medium, low, overdue
+- special: weekend, has-reminder, has-note, today, tomorrow, day-after-tomorrow, this-week
+
+**Examples:**
+- "what's pending for this weekend" →ACTION: LIST_TASKS|pending|weekend
+- "list pending tasks with reminders" → ACTION: LIST_TASKS|pending|has-reminder
+- "show me what's important" → ACTION: LIST_TASKS|important
+- "what's overdue" → ACTION: LIST_TASKS|overdue
+
+***When outputting ACTION, you MUST:****
+1. Put ONLY the action on the FIRST line
+2. NOTHING else on the same line as ACTION
+3. NEVER add explanations, confirmations, or punctuation on the same line as ACTION LIKE "day-after-tomorrow
+I'll show you the tasks for the day after tomorrow."
 =================
 GET ACTION (Single entity):
 ==================
@@ -316,6 +368,30 @@ NEVER REPLY ANYTHING
 Examples:
 User: "set a task preparation with due next day"
 → Title: "preparation" (NOT "Task preparation")
+
+// Add to system prompt
+
+**STATISTICS AND DASHBOARD COMMANDS:**
+
+SHOW_STATS - Show complete task statistics
+SHOW_DASHBOARD - Show full dashboard view with all metrics
+QUICK_OVERVIEW - Show quick overview of important metrics
+
+Examples:
+User: "show statistics"
+→ ACTION: SHOW_STATS
+
+User: "show dashboard view"
+→ ACTION: SHOW_DASHBOARD
+
+User: "what's my progress"
+→ ACTION: SHOW_DASHBOARD
+
+User: "give me a quick overview"
+→ ACTION: QUICK_OVERVIEW
+
+User: "show me summary"
+→ ACTION: SHOW_DASHBOARD
 
 FINAL INSTRUCTION:
 Generate the best possible response using:
@@ -392,91 +468,186 @@ function extractAction(response) {
       "",
     );
     cleaned = cleaned.replace(/\s+has?\s+been\s+deleted.*$/i, "");
-    return cleaned.trim();
+    cleaned = cleaned.trim();
+    return cleaned;
   }
 
-  // ✅ Check for LIST_TASKS - but verify it's not a false positive
-  // Check for LIST_TASKS action
+  // Helper function to clean values from AI responses
+  function cleanValue(value) {
+    if (!value) return null;
+    // Remove anything after newline
+    let cleaned = value.split("\n")[0];
+    // Remove any conversational text patterns
+    cleaned = cleaned.replace(/\s+I'll\s+show\s+you.*$/i, "");
+    cleaned = cleaned.replace(/\s+I've\s+created.*$/i, "");
+    cleaned = cleaned.replace(/\s+Here\s+are.*$/i, "");
+    cleaned = cleaned.replace(/\s+Let\s+me\s+.*$/i, "");
+    cleaned = cleaned.replace(/\s+Found.*$/i, "");
+    cleaned = cleaned.replace(/\s+Displaying.*$/i, "");
+    cleaned = cleaned.replace(/\s+Showing.*$/i, "");
+    cleaned = cleaned.replace(/\s+There\s+are.*$/i, "");
+    cleaned = cleaned.replace(/\s+These\s+are.*$/i, "");
+    // Remove trailing spaces and punctuation
+    cleaned = cleaned.trim();
+    cleaned = cleaned.replace(/[.!?]+$/, "");
+    return cleaned;
+  }
+  // ============================================
+  // STATISTICS AND DASHBOARD ACTIONS
+  // ============================================
+
+  // SHOW_STATS action
+  if (response.includes("ACTION: SHOW_STATS")) {
+    console.log("📊 SHOW_STATS action extracted");
+    return {
+      type: "SHOW_STATS",
+    };
+  }
+
+  // SHOW_DASHBOARD action
+  if (response.includes("ACTION: SHOW_DASHBOARD")) {
+    console.log("📊 SHOW_DASHBOARD action extracted");
+    return {
+      type: "SHOW_DASHBOARD",
+    };
+  }
+
+  // QUICK_OVERVIEW action
+  if (response.includes("ACTION: QUICK_OVERVIEW")) {
+    console.log("📋 QUICK_OVERVIEW action extracted");
+    return {
+      type: "QUICK_OVERVIEW",
+    };
+  }
+  // ============================================
+  // LIST ACTIONS
+  // ============================================
+
+  // LIST_TASKS action
   if (response.includes("ACTION: LIST_TASKS")) {
-    const match = response.match(/ACTION: LIST_TASKS(?:\|(.+))?/);
-    let filter = match?.[1] || "all";
+    const match = response.match(
+      /ACTION: LIST_TASKS(?:\|([^|]+))?(?:\|([^|]+))?/,
+    );
+    console.log("📋 LIST_TASKS action extracted");
 
-    // Clean up the filter
-    if (filter) {
-      filter = filter.toLowerCase().trim();
-      // Map natural language to simple filters
-      if (filter.includes("pending")) filter = "pending";
-      if (filter.includes("high")) filter = "high";
-      if (filter.includes("medium")) filter = "medium";
-      if (filter.includes("low")) filter = "low";
-      if (filter.includes("completed")) filter = "completed";
-    }
+    const status = match?.[1] ? cleanValue(match[1]) : "all";
+    const special = match?.[2] ? cleanValue(match[2]) : null;
 
-    console.log(`📋 LIST_TASKS action extracted with filter: "${filter}"`);
+    console.log(`   Status: "${status}", Special: "${special}"`);
+
     return {
       type: "LIST_TASKS",
+      status: status,
+      special: special,
+      filter: status,
+    };
+  }
+
+  // LIST_NOTES action
+  if (response.includes("ACTION: LIST_NOTES")) {
+    const match = response.match(/ACTION: LIST_NOTES(?:\|([^|]+))?/);
+    const filter = match?.[1] ? cleanValue(match[1]) : null;
+    console.log(`📝 LIST_NOTES action extracted, filter: "${filter}"`);
+    return {
+      type: "LIST_NOTES",
       filter: filter,
     };
   }
 
-  // Check for LIST_NOTES action
-  if (response.includes("ACTION: LIST_NOTES")) {
-    const match = response.match(/ACTION: LIST_NOTES(?:\|(.+))?/);
-    return {
-      type: "LIST_NOTES",
-      filter: match?.[1] || null,
-    };
-  }
-
-  // Check for LIST_REMINDERS action
+  // LIST_REMINDERS action
   if (response.includes("ACTION: LIST_REMINDERS")) {
-    const match = response.match(/ACTION: LIST_REMINDERS(?:\|(.+))?/);
+    const match = response.match(/ACTION: LIST_REMINDERS(?:\|([^|]+))?/);
+    const filter = match?.[1] ? cleanValue(match[1]) : null;
+    console.log(`⏰ LIST_REMINDERS action extracted, filter: "${filter}"`);
     return {
       type: "LIST_REMINDERS",
-      filter: match?.[1] || null,
+      filter: filter,
     };
   }
-  // Add these to extractAction function
 
-  // Check for RECENT_TASKS action
+  // ============================================
+  // GET ACTIONS (Single Entity)
+  // ============================================
+
+  // GET_NOTE action
+  if (response.includes("ACTION: GET_NOTE")) {
+    const match = response.match(/ACTION: GET_NOTE\|([^|\n]+)/);
+    if (match) {
+      const searchQuery = cleanValue(match[1]);
+      console.log(`📝 GET_NOTE action extracted, query: "${searchQuery}"`);
+      return {
+        type: "GET_NOTE",
+        searchQuery: searchQuery,
+      };
+    }
+  }
+
+  // GET_REMINDER action
+  if (response.includes("ACTION: GET_REMINDER")) {
+    const match = response.match(/ACTION: GET_REMINDER\|([^|\n]+)/);
+    if (match) {
+      const searchQuery = cleanValue(match[1]);
+      console.log(`⏰ GET_REMINDER action extracted, query: "${searchQuery}"`);
+      return {
+        type: "GET_REMINDER",
+        searchQuery: searchQuery,
+      };
+    }
+  }
+
+  // ============================================
+  // RECENT ACTIONS
+  // ============================================
+
+  // RECENT_TASKS action
   if (response.includes("ACTION: RECENT_TASKS")) {
     const match = response.match(/ACTION: RECENT_TASKS(?:\|(\d+))?/);
     const limit = match?.[1] ? parseInt(match[1]) : 5;
+    console.log(`📋 RECENT_TASKS action extracted, limit: ${limit}`);
     return {
       type: "RECENT_TASKS",
       limit: limit,
     };
   }
 
-  // Check for RECENT_REMINDERS action
+  // RECENT_REMINDERS action
   if (response.includes("ACTION: RECENT_REMINDERS")) {
     const match = response.match(/ACTION: RECENT_REMINDERS(?:\|(\d+))?/);
     const limit = match?.[1] ? parseInt(match[1]) : 5;
+    console.log(`⏰ RECENT_REMINDERS action extracted, limit: ${limit}`);
     return {
       type: "RECENT_REMINDERS",
       limit: limit,
     };
   }
 
-  // Check for RECENT_NOTES action
+  // RECENT_NOTES action
   if (response.includes("ACTION: RECENT_NOTES")) {
     const match = response.match(/ACTION: RECENT_NOTES(?:\|(\d+))?/);
     const limit = match?.[1] ? parseInt(match[1]) : 5;
+    console.log(`📝 RECENT_NOTES action extracted, limit: ${limit}`);
     return {
       type: "RECENT_NOTES",
       limit: limit,
     };
   }
 
-  // Check for RECENT_ALL action
+  // RECENT_ALL action
   if (response.includes("ACTION: RECENT_ALL")) {
     const match = response.match(/ACTION: RECENT_ALL(?:\|(\d+))?/);
     const limit = match?.[1] ? parseInt(match[1]) : 5;
+    console.log(`📋 RECENT_ALL action extracted, limit: ${limit}`);
     return {
       type: "RECENT_ALL",
       limit: limit,
     };
   }
+
+  // ============================================
+  // UPDATE ACTIONS
+  // ============================================
+
+  // UPDATE_TASK action
   if (response.includes("ACTION: UPDATE_TASK")) {
     const match = response.match(
       /ACTION: UPDATE_TASK\|([^|]+)\|([^|]+)\|(.+?)(?:\n|$)/,
@@ -484,12 +655,14 @@ function extractAction(response) {
     if (match) {
       return {
         type: "UPDATE_TASK",
-        searchQuery: match[1].trim(),
+        searchQuery: cleanSearchQuery(match[1].trim()),
         field: match[2].trim(),
         newValue: match[3].trim(),
       };
     }
   }
+
+  // UPDATE_REMINDER action
   if (response.includes("ACTION: UPDATE_REMINDER")) {
     const match = response.match(
       /ACTION: UPDATE_REMINDER\|([^|]+)\|([^|]+)\|(.+?)(?:\n|$)/,
@@ -497,12 +670,14 @@ function extractAction(response) {
     if (match) {
       return {
         type: "UPDATE_REMINDER",
-        searchQuery: match[1].trim(),
+        searchQuery: cleanSearchQuery(match[1].trim()),
         field: match[2].trim(),
         newValue: match[3].trim(),
       };
     }
   }
+
+  // UPDATE_NOTE action
   if (response.includes("ACTION: UPDATE_NOTE")) {
     const match = response.match(
       /ACTION: UPDATE_NOTE\|([^|]+)\|([^|]+)\|(.+?)(?:\n|$)/,
@@ -510,35 +685,18 @@ function extractAction(response) {
     if (match) {
       return {
         type: "UPDATE_NOTE",
-        searchQuery: match[1].trim(),
+        searchQuery: cleanSearchQuery(match[1].trim()),
         field: match[2].trim(),
         newValue: match[3].trim(),
       };
     }
   }
-  // Check for DELETE_REMINDER action
-  if (response.includes("ACTION: DELETE_REMINDER")) {
-    const match = response.match(/ACTION: DELETE_REMINDER\|([^|]+)/);
-    if (match) {
-      return {
-        type: "DELETE_REMINDER",
-        searchQuery: cleanSearchQuery(match[1]),
-      };
-    }
-  }
 
-  // Check for DELETE_NOTE action
-  if (response.includes("ACTION: DELETE_NOTE")) {
-    const match = response.match(/ACTION: DELETE_NOTE\|([^|]+)/);
-    if (match) {
-      return {
-        type: "DELETE_NOTE",
-        searchQuery: cleanSearchQuery(match[1]),
-      };
-    }
-  }
-  // Check for DELETE_TASK action
-  // Check for DELETE_TASK action
+  // ============================================
+  // DELETE ACTIONS
+  // ============================================
+
+  // DELETE_TASK action
   if (response.includes("ACTION: DELETE_TASK")) {
     const match = response.match(/ACTION: DELETE_TASK\|([^|\n]+)/);
     if (match) {
@@ -549,70 +707,90 @@ function extractAction(response) {
     }
   }
 
-  // Check for CREATE_TASK action
-  // In groqService.js - update the CREATE_TASK case
+  // DELETE_REMINDER action
+  if (response.includes("ACTION: DELETE_REMINDER")) {
+    const match = response.match(/ACTION: DELETE_REMINDER\|([^|\n]+)/);
+    if (match) {
+      return {
+        type: "DELETE_REMINDER",
+        searchQuery: cleanSearchQuery(match[1]),
+      };
+    }
+  }
 
-  // Check for CREATE_TASK action
+  // DELETE_NOTE action
+  if (response.includes("ACTION: DELETE_NOTE")) {
+    const match = response.match(/ACTION: DELETE_NOTE\|([^|\n]+)/);
+    if (match) {
+      return {
+        type: "DELETE_NOTE",
+        searchQuery: cleanSearchQuery(match[1]),
+      };
+    }
+  }
+
+  // ============================================
+  // CREATE ACTIONS
+  // ============================================
+
+  // CREATE_TASK action
   if (response.includes("ACTION: CREATE_TASK")) {
-    // Try to match with 3 parameters (title, priority, dueDate)
+    // Try with 3 parameters (title, priority, dueDate)
     let match = response.match(
-      /ACTION: CREATE_TASK\|([^|]+)\|([^|]+)\|([^|]+)/,
+      /ACTION: CREATE_TASK\|([^|]+)\|([^|]+)\|([^|\n]+)/,
     );
     if (match) {
       return {
         type: "CREATE_TASK",
-        title: match[1].trim(),
-        priority: match[2].trim().toLowerCase(),
-        dueDate: match[3].trim(),
+        title: cleanValue(match[1].trim()),
+        priority: cleanValue(match[2].trim().toLowerCase()),
+        dueDate: cleanValue(match[3].trim()),
       };
     }
 
     // Try with 2 parameters (title, priority)
-    match = response.match(/ACTION: CREATE_TASK\|([^|]+)\|([^|]+)/);
+    match = response.match(/ACTION: CREATE_TASK\|([^|]+)\|([^|\n]+)/);
     if (match) {
       return {
         type: "CREATE_TASK",
-        title: match[1].trim(),
-        priority: match[2].trim().toLowerCase(),
+        title: cleanValue(match[1].trim()),
+        priority: cleanValue(match[2].trim().toLowerCase()),
         dueDate: null,
       };
     }
 
     // Try with just title (default priority)
-    match = response.match(/ACTION: CREATE_TASK\|([^|]+)/);
+    match = response.match(/ACTION: CREATE_TASK\|([^|\n]+)/);
     if (match) {
       return {
         type: "CREATE_TASK",
-        title: match[1].trim(),
+        title: cleanValue(match[1].trim()),
         priority: "medium",
         dueDate: null,
       };
     }
-    console.log(
-      `📌 Current last mentioned task: "${getLastMentionedTask()}" (ID: ${getLastMentionedTaskId()})`,
-    );
   }
 
-  // Check for CREATE_NOTE action
+  // CREATE_NOTE action
   if (response.includes("ACTION: CREATE_NOTE")) {
-    const match = response.match(/ACTION: CREATE_NOTE\|([^|]+)\|([^|]+)/);
+    const match = response.match(/ACTION: CREATE_NOTE\|([^|]+)\|([^|\n]+)/);
     if (match) {
       return {
         type: "CREATE_NOTE",
-        title: match[1].trim(),
-        content: match[2].trim(),
+        title: cleanValue(match[1].trim()),
+        content: cleanValue(match[2].trim()),
       };
     }
   }
 
-  // Check for CREATE_REMINDER action
+  // CREATE_REMINDER action
   if (response.includes("ACTION: CREATE_REMINDER")) {
-    const match = response.match(/ACTION: CREATE_REMINDER\|([^|]+)\|([^|]+)/);
+    const match = response.match(/ACTION: CREATE_REMINDER\|([^|]+)\|([^|\n]+)/);
     if (match) {
       return {
         type: "CREATE_REMINDER",
-        title: match[1].trim(),
-        remindAt: match[2].trim(),
+        title: cleanValue(match[1].trim()),
+        remindAt: cleanValue(match[2].trim()),
       };
     }
   }
