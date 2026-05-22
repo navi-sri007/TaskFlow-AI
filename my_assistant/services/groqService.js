@@ -14,6 +14,10 @@ const conversationHistory = new Map();
 function getSystemPrompt() {
   return `You are a helpful personal assistant that manages tasks, notes, and reminders.
 
+DEFAULT ANSWERS:
+If its a greeting , greet accordingly.
+If the user asks irrelevant questions or single words , without **mentioning creation,updation,deletion or list **. Or if they are talking about something very irrelevant like "i have a party " , then reply with default answer , "Please ask about the relevant task,reminder and notes , only then i can hepl you".
+If they say something like information , then answer with a confirmation , whether to set a task , note or reminder.
 CRITICAL RULES:
 - If user says "update", "change", "modify", "set its", "change its" → USE UPDATE_TASK
 - If user says "create", "add", "new" → USE CREATE_TASK
@@ -218,6 +222,13 @@ User: "what is the note for meeting"
 User: "display reminder dentist"
 → ACTION: GET_REMINDER|dentist
 
+Actions:
+- GET_TASK: When user asks about a task (e.g., "show me task X", "get task details", "what is this task")
+- GET_NOTE: When user asks about a note (e.g., "show me note X", "get note content")
+- GET_REMINDER: When user asks about a reminder (e.g., "show me reminder X", "when is reminder X")
+
+For "this task", "this note", "this reminder" → Use searchQuery: "THIS_TASK_REFERENCE", "THIS_NOTE_REFERENCE", "THIS_REMINDER_REFERENCE"
+
 These actions return the entity with all linked information.
 
 
@@ -275,11 +286,45 @@ When user asks to "list tasks", "show pending tasks", etc.:
 UPDATE_TASK is for tasks only. Fields: dueDate, priority, title, completed
 UPDATE_REMINDER is for reminders only. Fields: remindAt (time only or date+time)
 
-When user says "update the reminder...":
+When user says "update the reminder [named] ...":
 - ALWAYS use UPDATE_REMINDER, NOT UPDATE_TASK
 
+**SCHEDULE UPDATES (task name, reminder name, or THIS_TASK_REFERENCE):**
+The server keeps **date** when only **time** is given, and keeps **time** when only **date** is given.
+
+| User gives | What to put in value | Effect |
+|------------|----------------------|--------|
+| Time only: 3pm, 5:30 pm | 3pm | Same calendar date, new time |
+| Date only: tomorrow, Friday, May 20 | tomorrow (no time in string) | Same time, new date |
+| Both: tomorrow 3pm | tomorrow 3pm | Updates date and time |
+
+Use the **exact task or reminder title** when the user names one. Use **THIS_TASK_REFERENCE** only for "this task" / "the task" / "same task".
+
+**Task due date** (updates linked reminder automatically):
+→ ACTION: UPDATE_TASK|{title or THIS_TASK_REFERENCE}|dueDate|{value}
+
+**Reminder time** (updates linked task due date automatically):
+→ ACTION: UPDATE_REMINDER|{title or THIS_TASK_REFERENCE}|remindAt|{value}
+
 Examples:
-User: "update the reminder parents to 2pm"
+User: "set reminder for this task to 3pm"
+→ ACTION: UPDATE_TASK|THIS_TASK_REFERENCE|dueDate|3pm
+
+User: "set reminder for Pay bills to 3pm"
+→ ACTION: UPDATE_TASK|Pay bills|dueDate|3pm
+
+User: "change Pay bills reminder to 5pm"
+→ ACTION: UPDATE_REMINDER|Pay bills|remindAt|5pm
+
+User: "move Pay bills to tomorrow" (no time mentioned)
+→ ACTION: UPDATE_TASK|Pay bills|dueDate|tomorrow
+
+User: "change due time of Pay bills to 2pm"
+→ ACTION: UPDATE_TASK|Pay bills|dueDate|2pm
+
+Never use the literal phrase "this task" as a database title — use THIS_TASK_REFERENCE.
+
+When user says "update the reminder parents to 2pm":
 → ACTION: UPDATE_REMINDER|parents|remindAt|2pm
 
 
@@ -393,6 +438,8 @@ User: "give me a quick overview"
 User: "show me summary"
 → ACTION: SHOW_DASHBOARD
 
+VERY IMPORTANT: Remove these words from the searchQuery: "note", "reminder", "task", "details", "content", "show", "get", "me"
+
 FINAL INSTRUCTION:
 Generate the best possible response using:
 - database context
@@ -458,18 +505,10 @@ Respond now.
 // Helper function to extract actions from AI response
 function extractAction(response) {
   // Helper function to clean search query
+  const { normalizeSearchQuery } = require("./entityExtractor");
+
   function cleanSearchQuery(query) {
-    if (!query) return "";
-    let cleaned = query.split("\n")[0];
-    cleaned = cleaned.replace(/["']/g, "");
-    cleaned = cleaned.replace(/[.!?]+$/, "");
-    cleaned = cleaned.replace(
-      /\s+(?:The|This)\s+(?:task|note|reminder).*$/i,
-      "",
-    );
-    cleaned = cleaned.replace(/\s+has?\s+been\s+deleted.*$/i, "");
-    cleaned = cleaned.trim();
-    return cleaned;
+    return normalizeSearchQuery(query);
   }
 
   // Helper function to clean values from AI responses

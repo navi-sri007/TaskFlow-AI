@@ -216,16 +216,29 @@ async function deleteDependencies(taskId) {
     const task = await Task.findById(taskId);
 
     if (task) {
+      // Delete by direct ID if reference exists
       if (task.reminderId) {
-        await Reminder.findByIdAndDelete(task.reminderId);
-        console.log(`  ✅ Deleted reminder: ${task.reminderId}`);
+        const deletedReminder = await Reminder.findByIdAndDelete(
+          task.reminderId,
+        );
+        if (deletedReminder) {
+          console.log(`  ✅ Deleted reminder: ${task.reminderId}`);
+        } else {
+          console.log(`  ⚠️ Reminder ${task.reminderId} not found`);
+        }
       }
+
       if (task.noteId) {
-        await Note.findByIdAndDelete(task.noteId);
-        console.log(`  ✅ Deleted note: ${task.noteId}`);
+        const deletedNote = await Note.findByIdAndDelete(task.noteId);
+        if (deletedNote) {
+          console.log(`  ✅ Deleted note: ${task.noteId}`);
+        } else {
+          console.log(`  ⚠️ Note ${task.noteId} not found`);
+        }
       }
     }
 
+    // Also clean up any orphaned records (as a safety measure)
     const reminderResult = await Reminder.deleteMany({ taskId: taskId });
     const noteResult = await Note.deleteMany({ taskId: taskId });
 
@@ -238,8 +251,8 @@ async function deleteDependencies(taskId) {
     console.log(`✨ Dependency deletion completed`);
     return {
       remindersDeleted:
-        reminderResult.deletedCount || (task?.reminderId ? 1 : 0),
-      notesDeleted: noteResult.deletedCount || (task?.noteId ? 1 : 0),
+        (task?.reminderId ? 1 : 0) + reminderResult.deletedCount,
+      notesDeleted: (task?.noteId ? 1 : 0) + noteResult.deletedCount,
     };
   } catch (error) {
     console.error(`❌ Error deleting dependencies:`, error);

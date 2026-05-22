@@ -137,7 +137,7 @@ async function loadNotes() {
         (note) => `
             <div class="item-card">
                 <strong>${note.title}</strong><br>
-                ${note.content.substring(0, 100)}${note.content.length > 100 ? "..." : ""}<br>
+                ${note.content.substring(0, 100).replace(/\n/g, "<br>")}${note.content.length > 100 ? "..." : ""}<br>
                 <small>📅 ${formatISTDate(note.createdAt)}</small>
             </div>
         `,
