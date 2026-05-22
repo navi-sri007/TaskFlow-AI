@@ -629,6 +629,40 @@ function extractAction(response) {
     return cleaned;
   }
 
+  if (response.includes("ACTION: GET_BY_POSITION")) {
+    const match = response.match(/ACTION: GET_BY_POSITION\|([^|\n]+)/);
+    if (match) {
+      let position = match[1].trim().toLowerCase();
+      console.log(
+        `📍 GET_BY_POSITION action extracted, position: "${position}"`,
+      );
+
+      // Convert word positions to numbers
+      const positionMap = {
+        first: 1,
+        second: 2,
+        third: 3,
+        fourth: 4,
+        fifth: 5,
+        sixth: 6,
+        seventh: 7,
+        eighth: 8,
+        ninth: 9,
+        tenth: 10,
+        last: "last",
+      };
+
+      let positionValue = positionMap[position] || position;
+      if (!isNaN(parseInt(positionValue))) {
+        positionValue = parseInt(positionValue);
+      }
+
+      return {
+        type: "GET_BY_POSITION",
+        position: positionValue,
+      };
+    }
+  }
   // ============================================
   // STATISTICS AND DASHBOARD ACTIONS
   // ============================================
@@ -1006,45 +1040,6 @@ function extractAction(response) {
       return {
         type: "DELETE_NOTE",
         searchQuery: cleanSearchQuery(match[1]),
-      };
-    }
-  }
-  // Add this after the DELETE actions section, before CREATE actions
-
-  // ============================================
-  // GET_BY_POSITION action (NEW)
-  // ============================================
-  if (response.includes("ACTION: GET_BY_POSITION")) {
-    const match = response.match(/ACTION: GET_BY_POSITION\|([^|\n]+)/);
-    if (match) {
-      let position = match[1].trim().toLowerCase();
-      console.log(
-        `📍 GET_BY_POSITION action extracted, position: "${position}"`,
-      );
-
-      // Convert word positions to numbers
-      const positionMap = {
-        first: 1,
-        second: 2,
-        third: 3,
-        fourth: 4,
-        fifth: 5,
-        sixth: 6,
-        seventh: 7,
-        eighth: 8,
-        ninth: 9,
-        tenth: 10,
-        last: "last",
-      };
-
-      let positionValue = positionMap[position] || position;
-      if (!isNaN(parseInt(positionValue))) {
-        positionValue = parseInt(positionValue);
-      }
-
-      return {
-        type: "GET_BY_POSITION",
-        position: positionValue,
       };
     }
   }

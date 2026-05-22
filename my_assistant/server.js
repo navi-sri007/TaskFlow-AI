@@ -1235,42 +1235,161 @@ app.post("/api/chat", async (req, res) => {
             `✅ Found item at position ${itemIndex}: "${item.title}" (${itemType})`,
           );
 
+          // ============================================
+          // CRITICAL: Set the appropriate last mentioned entity
+          // ============================================
+
           switch (itemType) {
             case "tasks":
+              // Set as last mentioned TASK
+              setLastMentionedTask(item.title, item._id, item);
+              console.log(
+                `📌 Set last mentioned TASK: "${item.title}" (ID: ${item._id})`,
+              );
+
+              // Also fetch and set linked reminder if exists
               const reminder = item.reminderId
                 ? await Reminder.findById(item.reminderId)
                 : null;
+              if (reminder) {
+                setLastMentionedReminder(
+                  reminder.title,
+                  reminder._id,
+                  reminder,
+                );
+                console.log(
+                  `📌 Also set last mentioned REMINDER: "${reminder.title}"`,
+                );
+              }
+
+              // Also fetch and set linked note if exists
               const note = item.noteId
                 ? await Note.findById(item.noteId)
                 : null;
+              if (note) {
+                setLastMentionedNote(note.title, note._id, note);
+                console.log(`📌 Also set last mentioned NOTE: "${note.title}"`);
+              }
+
               finalReply = formatSingleTaskTable(item, reminder, note);
-              finalReply += `\n\n📍 This was item #${itemIndex} from your previous list.`;
+              finalReply += `\n\n📍 **[Task ${itemIndex} of ${tableData.count}]** from your list.`;
+              finalReply += `\n\n💡 You can now ask:\n   • "Show **its reminder**"\n   • "Show **its note**"\n   • "Update **this task**"`;
               break;
 
             case "reminders":
+              // Set as last mentioned REMINDER
+              setLastMentionedReminder(item.title, item._id, item);
+              console.log(
+                `📌 Set last mentioned REMINDER: "${item.title}" (ID: ${item._id})`,
+              );
+
+              // Fetch and set linked task if exists
               const linkedTask = item.taskId
                 ? await Task.findById(item.taskId)
                 : null;
+              if (linkedTask) {
+                setLastMentionedTask(
+                  linkedTask.title,
+                  linkedTask._id,
+                  linkedTask,
+                );
+                console.log(
+                  `📌 Also set last mentioned TASK: "${linkedTask.title}"`,
+                );
+
+                // Also fetch note for the task
+                if (linkedTask.noteId) {
+                  const linkedNote = await Note.findById(linkedTask.noteId);
+                  if (linkedNote) {
+                    setLastMentionedNote(
+                      linkedNote.title,
+                      linkedNote._id,
+                      linkedNote,
+                    );
+                    console.log(
+                      `📌 Also set last mentioned NOTE: "${linkedNote.title}"`,
+                    );
+                  }
+                }
+              }
+
               finalReply = formatSingleReminderTable({
                 reminder: item,
                 linkedTask: linkedTask,
               });
-              finalReply += `\n\n📍 This was reminder #${itemIndex} from your previous list.`;
+              finalReply += `\n\n📍 **[Reminder ${itemIndex} of ${tableData.count}]** from your list.`;
+              if (linkedTask) {
+                finalReply += `\n\n💡 You can now ask:\n   • "Show **its task**"\n   • "Show **its note**"\n   • "Update **this reminder**"`;
+              } else {
+                finalReply += `\n\n💡 You can now ask:\n   • "Update **this reminder**"\n   • "Delete **this reminder**"`;
+              }
               break;
 
             case "notes":
+              // Set as last mentioned NOTE
+              setLastMentionedNote(item.title, item._id, item);
+              console.log(
+                `📌 Set last mentioned NOTE: "${item.title}" (ID: ${item._id})`,
+              );
+
+              // Fetch and set linked task if exists
               const linkedTaskForNote = item.taskId
                 ? await Task.findById(item.taskId)
                 : null;
+              if (linkedTaskForNote) {
+                setLastMentionedTask(
+                  linkedTaskForNote.title,
+                  linkedTaskForNote._id,
+                  linkedTaskForNote,
+                );
+                console.log(
+                  `📌 Also set last mentioned TASK: "${linkedTaskForNote.title}"`,
+                );
+
+                // Also fetch reminder for the task
+                if (linkedTaskForNote.reminderId) {
+                  const linkedReminder = await Reminder.findById(
+                    linkedTaskForNote.reminderId,
+                  );
+                  if (linkedReminder) {
+                    setLastMentionedReminder(
+                      linkedReminder.title,
+                      linkedReminder._id,
+                      linkedReminder,
+                    );
+                    console.log(
+                      `📌 Also set last mentioned REMINDER: "${linkedReminder.title}"`,
+                    );
+                  }
+                }
+              }
+
               finalReply = formatSingleNoteTable({
                 note: item,
                 linkedTask: linkedTaskForNote,
               });
-              finalReply += `\n\n📍 This was note #${itemIndex} from your previous list.`;
+              finalReply += `\n\n📍 **[Note ${itemIndex} of ${tableData.count}]** from your list.`;
+              if (linkedTaskForNote) {
+                finalReply += `\n\n💡 You can now ask:\n   • "Show **its task**"\n   • "Show **its reminder**"\n   • "Get **content of this note**"`;
+              } else {
+                finalReply += `\n\n💡 You can now ask:\n   • "Get **content of this note**"\n   • "Update **this note**"`;
+              }
               break;
 
             default:
               finalReply = `📋 Found: "${item.title}" (${itemType}) - Position #${itemIndex}`;
+          }
+
+          // Add navigation hints
+          if (positionResult.hasPrevious || positionResult.hasNext) {
+            finalReply += `\n\n📋 **Navigation:**`;
+            if (positionResult.hasPrevious) {
+              finalReply += `\n   • "show previous" or "go to item ${itemIndex - 1}"`;
+            }
+            if (positionResult.hasNext) {
+              finalReply += `\n   • "show next" or "go to item ${itemIndex + 1}"`;
+            }
+            finalReply += `\n   • "list all" to see the full table again`;
           }
           break;
 
