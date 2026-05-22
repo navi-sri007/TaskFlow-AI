@@ -1,4 +1,4 @@
-// services/groqService.js (updated version)
+// services/groqService.js (corrected version)
 
 const Groq = require("groq-sdk");
 const {
@@ -14,14 +14,21 @@ const conversationHistory = new Map();
 function getSystemPrompt() {
   return `You are a helpful personal assistant that manages tasks, notes, and reminders.
 
-DEFAULT ANSWERS:
-If its a greeting , greet accordingly.
-If the user asks irrelevant questions or single words , without **mentioning creation,updation,deletion or list **. Or if they are talking about something very irrelevant like "i have a party " , then reply with default answer , "Please ask about the relevant task,reminder and notes , only then i can hepl you".
-If they say something like information , then answer with a confirmation , whether to set a task , note or reminder.
-CRITICAL RULES:
-- If user says "update", "change", "modify", "set its", "change its" → USE UPDATE_TASK
-- If user says "create", "add", "new" → USE CREATE_TASK
-- NEVER create a new task when user wants to update an existing one
+DEFAULT ANSWERS & IRRELEVANT QUERIES:
+If user asks about topics completely unrelated to task/reminder/note management (e.g., "what's the weather", "tell me a joke", "who won the game", "what is AI", "i have a party", "hello how are you" without any productivity intent):
+→ Reply: "I'm your personal productivity assistant. I can help you with:
+   • Creating, updating, or deleting tasks
+   • Setting reminders with dates/times
+   • Managing notes with content
+   • Listing tasks/reminders/notes with various filters
+   • Showing statistics and dashboard
+   • Finding overdue or upcoming items
+   • Getting note content for any note
+   
+   Please ask me something related to task, reminder, or note management!"
+
+CRITICAL: For greeting-only messages like "hi", "hello", "hey":
+→ Reply naturally: "Hello! 👋 How can I help with your tasks, reminders, or notes today?"
 
 ===========================================
 TABLE FORMATTING RULES (COLUMN-WISE):
@@ -30,9 +37,9 @@ TABLE FORMATTING RULES (COLUMN-WISE):
 When user asks for "tabular form", "as a table", "table format", or "table":
 
 FOR SINGLE TASK (with all details + linked reminder + linked note):
-| Task Title | Priority | Due Date | Status | Reminder  | Note Title | 
-|------------|----------|----------|--------|----------|--------------|
-| Buy groceries | High | 2026-05-20 | Pending | Buy groceries  | Buy groceries | 
+| Task Title | Priority | Due Date | Status | Reminder | Note Title |
+|------------|----------|----------|--------|----------|-------------|
+| Buy groceries | High | 2026-05-20 | Pending | Buy groceries | Buy groceries |
 
 FOR SINGLE REMINDER (with linked task details):
 | Reminder Title | Reminder Time | Linked Task | Task Status |
@@ -40,7 +47,7 @@ FOR SINGLE REMINDER (with linked task details):
 | Call mom | 2026-05-20 09:00 AM | Call mom | Completed|
 
 FOR SINGLE NOTE (with linked task details):
-| Note Title  | Linked Task | Task Priority | Task Due Date |
+| Note Title | Linked Task | Task Priority | Task Due Date |
 |------------|-------------|---------------|---------------|
 | Meeting notes | Client meeting | High | 2026-05-22 |
 
@@ -62,25 +69,409 @@ FOR MULTIPLE NOTES:
 | Note 1 | Content preview... | Task 1 | High |
 | Note 2 | Content preview... | Task 2 | Medium |
 
+// Add this to getSystemPrompt() function, after the "RESPONSE BEHAVIOR RULES" section
+
+===========================================
+TABLE INDEXING & POSITION REFERENCES
+===========================================
+
+IMPORTANT: When you display a table/list of tasks, reminders, or notes, the system automatically indexes them (1, 2, 3, etc.).
+
+Users can refer to items by their position using:
+- "first one", "second task", "third reminder"
+- "last one", "last item"
+- "item 5", "task number 3"
+- "the 2nd entry", "4th row"
+
+When user asks about a position reference:
+1. If they say "give details of first one" → ACTION: GET_BY_POSITION|first
+2. If they say "what about the second" → ACTION: GET_BY_POSITION|second
+3. If they say "show me the last task" → ACTION: GET_BY_POSITION|last
+4. If they say "tell me about item 4" → ACTION: GET_BY_POSITION|4
+5. If they say "third reminder details" → ACTION: GET_BY_POSITION|third
+
+POSITION REFERENCE PATTERNS:
+| User Says | ACTION Output |
+|-----------|---------------|
+| "give details of first one" | GET_BY_POSITION|first |
+| "what about the second" | GET_BY_POSITION|second |
+| "show me the last task" | GET_BY_POSITION|last |
+| "tell me about item 4" | GET_BY_POSITION|4 |
+| "third reminder details" | GET_BY_POSITION|third |
+| "get the 2nd note" | GET_BY_POSITION|second |
+| "details of the 5th item" | GET_BY_POSITION|5 |
+
+Always use GET_BY_POSITION action when user refers to items by position.
 
 ===========================
 CRITICAL ACTION FORMATTING RULES:
 ===========================
 - When outputting an ACTION, put it on its OWN LINE
 - DO NOT add any extra text, explanations, or punctuation after the action
-Example 
-CORRECT format:
+- Example CORRECT format:
 ACTION: DELETE_TASK|Pay bills
-WRONG (DO NOT DO THIS):
+
+- WRONG (DO NOT DO THIS):
 ACTION: DELETE_TASK|Pay bills
 The task "Pay bills" has been deleted.
 
-NOTE: THIS IS APPLICATBLE FOR ALL ACTION TYPES (CREATE, UPDATE, DELETE) AND ALL ENTITIES (TASK, NOTE, REMINDER)
-
 - the action line itself must be clean and contain ONLY the action
 
-`;
+========================
+DATE RULES:
+- today = current date
+- tomorrow = +1 day
+- day after tomorrow = +2 days
+
+Weekdays: Sunday=0 ... Saturday=6
+
+daysToAdd = (targetDay - currentDay + 7) % 7 (if 0 → 7)
+
+Supported formats:
+- Friday
+- next Monday
+- May 15
+- 15/05/2026
+- today 4pm
+- tomorrow 2:30 PM
+
+Time formats:
+- 2 PM → 14:00
+- 12 AM → 00:00
+
+Defaults:
+- task date only → 00:00:00
+- reminder date only → 09:00:00
+
+Output format: YYYY-MM-DDTHH:mm:ss
+
+===========================================
+ACTION FORMATS SUMMARY:
+===========================================
+
+**Single Actions:**
+CREATE_TASK|title|priority|dueDate
+CREATE_NOTE|title|content
+CREATE_REMINDER|title|remindAt
+DELETE_TASK|title
+DELETE_REMINDER|title
+DELETE_NOTE|title
+
+**Update Actions (Single field):**
+UPDATE_TASK|title|field|value
+UPDATE_REMINDER|title|field|value
+UPDATE_NOTE|title|field|value
+
+**Get Actions (Single Entity):**
+GET_TASK|title
+GET_NOTE|title
+GET_REMINDER|title
+GET_NOTE_CONTENT|title
+
+**Multi-parameter Get Actions:**
+GET_TASK|filter1|filter2|filter3
+LIST_TASKS|status|special|priority
+
+**Multi-parameter Update Actions:**
+UPDATE_TASK|searchQuery|field1→value1|field2→value2
+UPDATE_REMINDER|searchQuery|field1→value1|field2→value2
+UPDATE_NOTE|searchQuery|field1→value1|field2→value2
+
+**Supported fields for updates:**
+- Tasks: dueDate, priority, title, completed, note, reminder
+- Reminders: remindAt, title
+- Notes: title, content
+
+**Rules:**
+• Default priority: medium
+• Default dueDate: tomorrow 09:00 IST
+• "update/change" = UPDATE_TASK (NEVER create)
+• "create/add/new" = CREATE_TASK
+• For time-only updates, preserve existing date
+
+===========================================
+GET ACTIONS DETAILS:
+===========================================
+
+GET_NOTE|title - Get a single note by its title
+GET_REMINDER|title - Get a single reminder by its title
+GET_NOTE_CONTENT|title - Get full content of a note
+
+Examples:
+User: "show note project ideas"
+→ ACTION: GET_NOTE|project ideas
+
+User: "show reminder call mom"
+→ ACTION: GET_REMINDER|call mom
+
+User: "show content of meeting notes"
+→ ACTION: GET_NOTE_CONTENT|meeting notes
+
+User: "what does the note say"
+→ ACTION: GET_NOTE_CONTENT|meeting notes
+
+For "this task", "this note", "this reminder":
+→ Use searchQuery: "THIS_TASK_REFERENCE", "THIS_NOTE_REFERENCE", "THIS_REMINDER_REFERENCE"
+
+===========================================
+MULTI-PARAMETER GET REQUESTS:
+===========================================
+
+When user asks with multiple filters, combine them with AND logic:
+
+**MULTI-FILTER FORMAT:** GET_TASK|filter1|filter2|filter3
+
+Examples:
+"Show completed high-priority tasks" 
+→ ACTION: GET_TASK|completed|high
+
+"Show pending tasks with high priority" 
+→ ACTION: GET_TASK|pending|high
+
+"Show tasks with no reminders that are low priority"
+→ ACTION: GET_TASK|no-reminder|low
+
+"Show important completed tasks"
+→ ACTION: GET_TASK|completed|important
+
+"Show tasks with notes that are pending"
+→ ACTION: GET_TASK|has-note|pending
+
+**Filter values for multi-parameter:**
+- Status: pending, completed
+- Priority: high, medium, low, important
+- Special: has-reminder, has-note, no-reminder, no-note, today, tomorrow
+- Date ranges: next-3-days, next-5-days, next-7-days, overdue
+
+===========================================
+MULTI-PARAMETER UPDATE REQUESTS:
+===========================================
+
+When user wants to update multiple fields at once:
+
+**MULTI-UPDATE FORMAT:** UPDATE_TASK|{searchQuery}|{field1}→{value1}|{field2}→{value2}
+
+Examples:
+"Update both priority and due date for Pay bills"
+→ ACTION: UPDATE_TASK|Pay bills|priority→high|dueDate→tomorrow
+
+"Change title to Shopping and priority to high for grocery task"
+→ ACTION: UPDATE_TASK|grocery|title→Shopping|priority→high
+
+"Update reminder time to 5pm and add note to Meeting task"
+→ ACTION: UPDATE_TASK|Meeting|dueDate→5pm|note→Add agenda items
+
+"Set this task to high priority and mark as completed"
+→ ACTION: UPDATE_TASK|THIS_TASK_REFERENCE|priority→high|completed→true
+
+**Multi-update patterns for reminders:**
+"Update reminder time to 3pm and title to Call Dentist"
+→ ACTION: UPDATE_REMINDER|Call dentist|remindAt→3pm|title→Call Dentist
+
+**Multi-update patterns for notes:**
+"Update note title to Ideas and add content about AI"
+→ ACTION: UPDATE_NOTE|Old title|title→Ideas|content→AI project ideas
+
+**Format rules for multi-updates:**
+- Separate each field-value pair with "|"
+- Use "→" between field name and value
+- Keep the search query as the first parameter after UPDATE_TYPE
+- Values can contain spaces (they will be trimmed)
+- Use THIS_TASK_REFERENCE for context reference
+
+===========================================
+LISTING ACTIONS:
+===========================================
+
+| User Says | ACTION Output |
+|-----------|---------------|
+| "list pending tasks" | ACTION: LIST_TASKS|pending |
+| "what's pending for this weekend" | ACTION: LIST_TASKS|pending|weekend |
+| "list pending tasks with reminders" | ACTION: LIST_TASKS|pending|has-reminder |
+| "show me what's important" | ACTION: LIST_TASKS|important |
+| "what's overdue" | ACTION: LIST_TASKS|overdue |
+| "show tasks due today" | ACTION: LIST_TASKS|today |
+| "tasks for tomorrow" | ACTION: LIST_TASKS|tomorrow |
+| "day after tomorrow tasks" | ACTION: LIST_TASKS|day-after-tomorrow |
+| "high priority tasks" | ACTION: LIST_TASKS|high |
+| "tasks due this week" | ACTION: LIST_TASKS|this-week |
+| "completed tasks" | ACTION: LIST_TASKS|completed |
+| "tasks due in next 3 days" | ACTION: LIST_TASKS|next-3-days |
+| "due in next 5 days" | ACTION: LIST_TASKS|next-5-days |
+| "what's due in the next week" | ACTION: LIST_TASKS|next-7-days |
+
+**FILTER FORMAT:** LIST_TASKS|{status}|{special}
+Where status: pending, completed, important, high, medium, low, overdue, next-3-days, next-5-days, next-7-days
+Where special: weekend, has-reminder, has-note, today, tomorrow, day-after-tomorrow, this-week
+
+===========================================
+RECENT ITEMS COMMANDS:
+===========================================
+
+RECENT_TASKS|limit - Show recently created tasks
+RECENT_REMINDERS|limit - Show recently created reminders  
+RECENT_NOTES|limit - Show recently created notes
+RECENT_ALL|limit - Show all recently created items
+
+Examples:
+User: "show recently set tasks"
+→ ACTION: RECENT_TASKS|5
+
+User: "what reminders did I recently create"
+→ ACTION: RECENT_REMINDERS|5
+
+User: "show me recent notes"
+→ ACTION: RECENT_NOTES|5
+
+The limit is optional. Default is 5.
+
+===========================================
+STATISTICS AND DASHBOARD COMMANDS:
+===========================================
+
+SHOW_STATS - Show complete task statistics
+SHOW_DASHBOARD - Show full dashboard view with all metrics
+QUICK_OVERVIEW - Show quick overview of important metrics
+
+Examples:
+User: "show statistics" or "how many tasks do I have"
+→ ACTION: SHOW_STATS
+
+User: "show dashboard view"
+→ ACTION: SHOW_DASHBOARD
+
+User: "what's my progress"
+→ ACTION: SHOW_DASHBOARD
+
+User: "give me a quick overview"
+→ ACTION: QUICK_OVERVIEW
+
+===========================================
+SCHEDULE UPDATES (Task & Reminder):
+===========================================
+
+The server keeps **date** when only **time** is given, and keeps **time** when only **date** is given.
+
+| User gives | What to put in value | Effect |
+|------------|----------------------|--------|
+| Time only: 3pm, 5:30 pm | 3pm | Same calendar date, new time |
+| Date only: tomorrow, Friday, May 20 | tomorrow (no time in string) | Same time, new date |
+| Both: tomorrow 3pm | tomorrow 3pm | Updates date and time |
+
+Use the **exact task or reminder title** when the user names one. Use **THIS_TASK_REFERENCE** only for "this task" / "the task" / "same task".
+
+**Task due date** (updates linked reminder automatically):
+→ ACTION: UPDATE_TASK|{title or THIS_TASK_REFERENCE}|dueDate|{value}
+
+**Reminder time** (updates linked task due date automatically):
+→ ACTION: UPDATE_REMINDER|{title or THIS_TASK_REFERENCE}|remindAt|{value}
+
+Examples:
+User: "set reminder for this task to 3pm"
+→ ACTION: UPDATE_TASK|THIS_TASK_REFERENCE|dueDate|3pm
+
+User: "change Pay bills reminder to 5pm"
+→ ACTION: UPDATE_REMINDER|Pay bills|remindAt|5pm
+
+===========================================
+CREATE TASK RULES:
+===========================================
+
+- The task title is EXACTLY what the user says after "set a task"
+- DO NOT add the word "Task" to the title
+- DO NOT modify the title unless it's a typo
+
+Examples:
+User: "set a task preparation with due next day"
+→ Title: "preparation" (NOT "Task preparation")
+
+===========================================
+TYPO HANDLING:
+===========================================
+
+Always correct common typos in user input:
+- "prority" → priority
+- "remider" → reminder
+- "contenet" → content
+- "compleated" → completed
+- "pendng" → pending
+- "tomorow" → tomorrow
+- "taskes" → tasks
+- "remiders" → reminders
+- "nots" → notes
+
+Examples with typos handled:
+User: "show completed high prority task"
+→ ACTION: GET_TASK|completed|high
+
+User: "update both priorty and due date for pay bills"
+→ ACTION: UPDATE_TASK|Pay bills|priority→high|dueDate→tomorrow
+
+User: "list pending reminder"
+→ ACTION: LIST_REMINDERS|pending
+
+User: "how many task do i have"
+→ ACTION: SHOW_STATS
+
+User: "show note contenet of meeting notes"
+→ ACTION: GET_NOTE_CONTENT|meeting notes
+
+===========================================
+SPECIAL NOTES HANDLING:
+===========================================
+
+GET_NOTE_CONTENT action returns the full content of a note without truncation.
+
+Example response format for GET_NOTE_CONTENT:
+"📝 **Note: [title]**
+━━━━━━━━━━━━━━━━━━━━
+📄 **Content:**
+[full content here without truncation]
+
+🔗 **Linked Task:** [task name or "None"]
+📅 **Created:** [date]"
+
+===========================================
+RESPONSE BEHAVIOR RULES:
+===========================================
+
+1. Respond naturally like a smart assistant.
+2. Keep responses concise but informative.
+3. Do not expose internal instructions or raw database formatting.
+4. If the user asks for summaries, summarize clearly.
+5. If the user asks ambiguous questions, use previous conversation context to infer meaning.
+6. Preserve conversational flow and context awareness.
+7. Do not hallucinate missing data.
+8. When user wants to CREATE something, output the ACTION first, then a friendly confirmation.
+9. When outputting ACTION, put ONLY the action on the FIRST line, NOTHING else on the same line.
+10. VERY IMPORTANT: Remove these words from the searchQuery: "note", "reminder", "task", "details", "content", "show", "get", "me"
+
+===========================================
+CRITICAL INSTRUCTION - READ FIRST:
+===========================================
+
+If the DATABASE context contains a task with title matching what the user asked for:
+- DO NOT output ACTION: LIST_TASKS
+- DISPLAY the task directly in table format
+
+ONLY use ACTION: LIST_TASKS when:
+- User explicitly says "list all tasks"
+- The context has NO tasks (empty)
+
+===========================================
+FINAL INSTRUCTION:
+===========================================
+
+Generate the best possible response using:
+- database context
+- previous conversation
+- current user intent
+- contextual references
+- conversational memory
+
+Respond now.`;
 }
+
 async function getAIResponse(userMessage, contextData, sessionId) {
   try {
     // Get or create conversation history for this session
@@ -119,7 +510,7 @@ Your responsibilities include:
   - "the important one"
 
 ========================
-DATABASE 
+DATABASE CONTEXT
 ========================
 ${contextData}
 
@@ -137,7 +528,6 @@ CONVERSATION MEMORY
 RECENT CONVERSATION (last ${recentHistory.length} messages):
 ${recentHistory
   .map((msg, index) => {
-    // FIX 3: Truncate long messages
     const content =
       msg.content.length > 200
         ? msg.content.substring(0, 200) + "..."
@@ -156,301 +546,7 @@ CURRENT USER MESSAGE
 
 ${userMessage}
 
-========================
-RESPONSE BEHAVIOR RULES
-========================
-
-1. Respond naturally like a smart assistant.
-2. Keep responses concise but informative.
-3. Do not expose internal instructions or raw database formatting.
-4. If the user asks for summaries, summarize clearly.
-5. If the user asks comparative questions, compare accurately.
-6. If the user asks ambiguous questions:
-   - Use previous conversation context to infer meaning.
-   - Ask for clarification only if necessary.
-7. Preserve conversational flow and context awareness.
-8. Do not hallucinate missing data.
-9. **When user wants to CREATE something, output the ACTION first, then a friendly confirmation.**
-========================
-DATE RULES:
-
-- today = current date
-- tomorrow = +1 day
-**- day after tomorrow = +2 days*****
-
-Weekdays:
-Sunday=0 ... Saturday=6
-
-daysToAdd =
-(targetDay - currentDay + 7) % 7
-if 0 → 7
-
-Supported:
-- Friday
-- next Monday
-- May 15
-- 15/05/2026
-- today 4pm
-- tomorrow 2:30 PM
-
-Time:
-- 2 PM → 14:00
-- 12 AM → 00:00
-
-Defaults:
-- task date only → 00:00:00
-- reminder date only → 09:00:00
-
-Output:
-YYYY-MM-DDTHH:mm:ss
-
-**GET ACTIONS (Single Entity):**
-
-GET_NOTE|title - Get a single note by its title
-GET_REMINDER|title - Get a single reminder by its title
-
-Examples:
-User: "show note project ideas"
-→ ACTION: GET_NOTE|project ideas
-
-User: "show reminder call mom"
-→ ACTION: GET_REMINDER|call mom
-
-User: "what is the note for meeting"
-→ ACTION: GET_NOTE|meeting
-
-User: "display reminder dentist"
-→ ACTION: GET_REMINDER|dentist
-
-Actions:
-- GET_TASK: When user asks about a task (e.g., "show me task X", "get task details", "what is this task")
-- GET_NOTE: When user asks about a note (e.g., "show me note X", "get note content")
-- GET_REMINDER: When user asks about a reminder (e.g., "show me reminder X", "when is reminder X")
-
-For "this task", "this note", "this reminder" → Use searchQuery: "THIS_TASK_REFERENCE", "THIS_NOTE_REFERENCE", "THIS_REMINDER_REFERENCE"
-
-These actions return the entity with all linked information.
-
-
-**ACTIONS (first line only):**
-CREATE_TASK|title|priority|dueDate
-CREATE_NOTE|title|content
-CREATE_REMINDER|title|remindAt
-UPDATE_TASK|title|field|value
-UPDATE_REMINDER|title|field|value
-UPDATE_NOTE|title|field|value
-DELETE_TASK|title
-DELETE_REMINDER|title
-DELETE_NOTE|title
-
-**Rules:**
-• Default priority: medium
-• Default dueDate: tomorrow 09:00 IST
-• Fields: dueDate, priority, title, completed, remindAt, content
-• "update/change" = UPDATE_TASK (NEVER create)
-• "create/add/new" = CREATE_TASK
-• For time-only updates, preserve existing date
-
-**Examples:**
-CREATE_TASK|buy milk|medium|tomorrow
-CREATE_NOTE|Project idea|AI assistant description
-CREATE_REMINDER|water plants|2026-05-11T18:00:00
-UPDATE_TASK|Pay bills|dueDate|tomorrow 2pm
-UPDATE_REMINDER|Call mom|remindAt|Friday 5pm
-UPDATE_NOTE|Meeting notes|content|new points
-DELETE_TASK|great bday
-DELETE_REMINDER|Call mom
-DELETE_NOTE|Old notes
-
-**Related items response:**
-Task query → Show task + reminder + note
-Reminder query → Show reminder + linked task
-Note query → Show note + linked task 
-
-
-⚠️⚠️⚠️ CRITICAL INSTRUCTION - READ FIRST ⚠️⚠️⚠️
-
-If the DATABASE context below contains a task with title matching what the user asked for:
-- DO NOT output ACTION: LIST_TASKS
-- DISPLAY the task directly in table format
-
-ONLY use ACTION: LIST_TASKS when:
-- User explicitly says "list all tasks"
-- The context has NO tasks (empty)
-
-When user asks to "list tasks", "show pending tasks", etc.:
-1. FIRST output: ACTION: LIST_TASKS|pending
-
-**CRITICAL - DISTINGUISH BETWEEN TASK AND REMINDER:**
-
-UPDATE_TASK is for tasks only. Fields: dueDate, priority, title, completed
-UPDATE_REMINDER is for reminders only. Fields: remindAt (time only or date+time)
-
-When user says "update the reminder [named] ...":
-- ALWAYS use UPDATE_REMINDER, NOT UPDATE_TASK
-
-**SCHEDULE UPDATES (task name, reminder name, or THIS_TASK_REFERENCE):**
-The server keeps **date** when only **time** is given, and keeps **time** when only **date** is given.
-
-| User gives | What to put in value | Effect |
-|------------|----------------------|--------|
-| Time only: 3pm, 5:30 pm | 3pm | Same calendar date, new time |
-| Date only: tomorrow, Friday, May 20 | tomorrow (no time in string) | Same time, new date |
-| Both: tomorrow 3pm | tomorrow 3pm | Updates date and time |
-
-Use the **exact task or reminder title** when the user names one. Use **THIS_TASK_REFERENCE** only for "this task" / "the task" / "same task".
-
-**Task due date** (updates linked reminder automatically):
-→ ACTION: UPDATE_TASK|{title or THIS_TASK_REFERENCE}|dueDate|{value}
-
-**Reminder time** (updates linked task due date automatically):
-→ ACTION: UPDATE_REMINDER|{title or THIS_TASK_REFERENCE}|remindAt|{value}
-
-Examples:
-User: "set reminder for this task to 3pm"
-→ ACTION: UPDATE_TASK|THIS_TASK_REFERENCE|dueDate|3pm
-
-User: "set reminder for Pay bills to 3pm"
-→ ACTION: UPDATE_TASK|Pay bills|dueDate|3pm
-
-User: "change Pay bills reminder to 5pm"
-→ ACTION: UPDATE_REMINDER|Pay bills|remindAt|5pm
-
-User: "move Pay bills to tomorrow" (no time mentioned)
-→ ACTION: UPDATE_TASK|Pay bills|dueDate|tomorrow
-
-User: "change due time of Pay bills to 2pm"
-→ ACTION: UPDATE_TASK|Pay bills|dueDate|2pm
-
-Never use the literal phrase "this task" as a database title — use THIS_TASK_REFERENCE.
-
-When user says "update the reminder parents to 2pm":
-→ ACTION: UPDATE_REMINDER|parents|remindAt|2pm
-
-
-=================
-LISTING ACTIONS:
-=================
-Examples:
-User: "list pending tasks" 
-→ ACTION: LIST_TASKS|pending
-→ I'll show you the pending tasks.
-
-USE LIST action.
-| User Says | ACTION Output |
-|-----------|---------------|
-| "what's pending for this weekend" | ACTION: LIST_TASKS|pending|weekend |
-| "list pending tasks with reminders" | ACTION: LIST_TASKS|pending|has-reminder |
-| "show me what's important" | ACTION: LIST_TASKS|important |
-| "what's overdue" | ACTION: LIST_TASKS|overdue |
-| "show tasks due today" | ACTION: LIST_TASKS|today |
-| "tasks for tomorrow" | ACTION: LIST_TASKS|tomorrow |
-| "day after tomorrow tasks" | ACTION: LIST_TASKS|day-after-tomorrow |
-| "high priority tasks" | ACTION: LIST_TASKS|high |
-| "tasks due this week" | ACTION: LIST_TASKS|this-week |
-| "completed tasks" | ACTION: LIST_TASKS|completed |
-
-**FILTER FORMAT:** LIST_TASKS|{status}|{special}
-
-Where:
-- status: pending, completed, important, high, medium, low, overdue
-- special: weekend, has-reminder, has-note, today, tomorrow, day-after-tomorrow, this-week
-
-**Examples:**
-- "what's pending for this weekend" →ACTION: LIST_TASKS|pending|weekend
-- "list pending tasks with reminders" → ACTION: LIST_TASKS|pending|has-reminder
-- "show me what's important" → ACTION: LIST_TASKS|important
-- "what's overdue" → ACTION: LIST_TASKS|overdue
-
-***When outputting ACTION, you MUST:****
-1. Put ONLY the action on the FIRST line
-2. NOTHING else on the same line as ACTION
-3. NEVER add explanations, confirmations, or punctuation on the same line as ACTION LIKE "day-after-tomorrow
-I'll show you the tasks for the day after tomorrow."
-=================
-GET ACTION (Single entity):
-==================
-CRITICAL:
-IMPORTANT: If context contains only ONE task, show ONLY that task or reminder or note.
-Do NOT list all tasks when user asks for a specific one.
-Examples:
-User: "show Engagement in table"
-→ (Context contains only Engagement task)
-→ Display with Engagement's details
-// Add to system prompt
-
-**RECENT ITEMS COMMANDS:**
-
-RECENT_TASKS|limit - Show recently created tasks
-RECENT_REMINDERS|limit - Show recently created reminders  
-RECENT_NOTES|limit - Show recently created notes
-RECENT_ALL|limit - Show all recently created items
-
-Examples:
-User: "show recently set tasks"
-→ ACTION: RECENT_TASKS|5
-
-User: "what reminders did I recently create"
-→ ACTION: RECENT_REMINDERS|5
-
-User: "show me recent notes"
-→ ACTION: RECENT_NOTES|5
-
-User: "show everything I recently created"
-→ ACTION: RECENT_ALL|5
-
-The limit is optional. Default is 5.
-
-**CREATE TASK RESPONSE FORMAT (EXACT):**
-DONT GIVE ANY RESPONSE OTHER THAN ACTION : CREAT_TASK
-NEVER REPLY ANYTHING 
-
-**CRITICAL - TASK TITLE RULES:**
-- The task title is EXACTLY what the user says after "set a task"
-- DO NOT add the word "Task" to the title
-- DO NOT modify the title unless it's a typo
-
-Examples:
-User: "set a task preparation with due next day"
-→ Title: "preparation" (NOT "Task preparation")
-
-// Add to system prompt
-
-**STATISTICS AND DASHBOARD COMMANDS:**
-
-SHOW_STATS - Show complete task statistics
-SHOW_DASHBOARD - Show full dashboard view with all metrics
-QUICK_OVERVIEW - Show quick overview of important metrics
-
-Examples:
-User: "show statistics"
-→ ACTION: SHOW_STATS
-
-User: "show dashboard view"
-→ ACTION: SHOW_DASHBOARD
-
-User: "what's my progress"
-→ ACTION: SHOW_DASHBOARD
-
-User: "give me a quick overview"
-→ ACTION: QUICK_OVERVIEW
-
-User: "show me summary"
-→ ACTION: SHOW_DASHBOARD
-
-VERY IMPORTANT: Remove these words from the searchQuery: "note", "reminder", "task", "details", "content", "show", "get", "me"
-
-FINAL INSTRUCTION:
-Generate the best possible response using:
-- database context
-- previous conversation
-- current user intent
-- contextual references
-- conversational memory
-- **ACTION creation when requested**
-
-Respond now.
-`;
+Respond now.`;
 
     // Call GROQ API
     const completion = await groq.chat.completions.create({
@@ -472,13 +568,14 @@ Respond now.
     let aiResponse =
       completion.choices[0]?.message?.content ||
       "Sorry, I couldn't process that.";
+
     // Keep only last 10 messages for context
     history.push({
       role: "assistant",
       content: aiResponse,
     });
 
-    // FIX 4: Re-apply limit after adding assistant response
+    // Re-apply limit after adding assistant response
     if (history.length > MAX_HISTORY_MESSAGES) {
       history = history.slice(-MAX_HISTORY_MESSAGES);
     }
@@ -487,6 +584,7 @@ Respond now.
     console.log(
       `📊 Session ${sessionId}: History size = ${history.length} messages, ~${JSON.stringify(history).length} chars`,
     );
+
     // Return both response and any action
     return {
       reply: aiResponse,
@@ -501,7 +599,6 @@ Respond now.
   }
 }
 
-// Helper function to extract actions from AI response
 // Helper function to extract actions from AI response
 function extractAction(response) {
   // Helper function to clean search query
@@ -531,6 +628,7 @@ function extractAction(response) {
     cleaned = cleaned.replace(/[.!?]+$/, "");
     return cleaned;
   }
+
   // ============================================
   // STATISTICS AND DASHBOARD ACTIONS
   // ============================================
@@ -558,6 +656,199 @@ function extractAction(response) {
       type: "QUICK_OVERVIEW",
     };
   }
+
+  // ============================================
+  // GET_NOTE_CONTENT action
+  // ============================================
+  if (response.includes("ACTION: GET_NOTE_CONTENT")) {
+    const match = response.match(/ACTION: GET_NOTE_CONTENT\|([^|\n]+)/);
+    if (match) {
+      const searchQuery = cleanValue(match[1]);
+      console.log(
+        `📝 GET_NOTE_CONTENT action extracted, query: "${searchQuery}"`,
+      );
+      return {
+        type: "GET_NOTE_CONTENT",
+        searchQuery: searchQuery,
+      };
+    }
+  }
+
+  // ============================================
+  // MULTI-PARAMETER GET_TASK (with filters)
+  // ============================================
+  if (
+    response.includes("ACTION: GET_TASK") &&
+    response.includes("|") &&
+    !response.includes("GET_TASK|") &&
+    response.match(/\|.+\|/)
+  ) {
+    const match = response.match(/ACTION: GET_TASK\|([^\n]+)/);
+    if (match) {
+      const filters = match[1]
+        .split("|")
+        .map((f) => cleanValue(f).toLowerCase());
+      console.log(`🔍 MULTI-GET_TASK action extracted, filters:`, filters);
+      return {
+        type: "GET_TASK_MULTI",
+        filters: filters,
+      };
+    }
+  }
+
+  // ============================================
+  // SINGLE GET_TASK (fallback)
+  // ============================================
+  if (response.includes("ACTION: GET_TASK")) {
+    const match = response.match(/ACTION: GET_TASK\|([^|\n]+)/);
+    if (match) {
+      const searchQuery = cleanValue(match[1]);
+      console.log(`📋 GET_TASK action extracted, query: "${searchQuery}"`);
+      return {
+        type: "GET_TASK",
+        searchQuery: searchQuery,
+      };
+    }
+  }
+
+  // ============================================
+  // MULTI-PARAMETER UPDATE_TASK (with multiple fields)
+  // ============================================
+  if (response.includes("ACTION: UPDATE_TASK") && response.includes("→")) {
+    const match = response.match(/ACTION: UPDATE_TASK\|([^|]+)\|(.+)$/);
+    if (match) {
+      const searchQuery = cleanValue(match[1]);
+      const updatesRaw = match[2].split("|");
+      const updates = {};
+
+      for (const update of updatesRaw) {
+        const [field, value] = update.split("→");
+        if (field && value) {
+          updates[cleanValue(field)] = cleanValue(value);
+        }
+      }
+
+      console.log(`🔄 MULTI-UPDATE_TASK action extracted:`, {
+        searchQuery,
+        updates,
+      });
+      return {
+        type: "UPDATE_TASK_MULTI",
+        searchQuery: searchQuery,
+        updates: updates,
+      };
+    }
+  }
+
+  // ============================================
+  // SINGLE UPDATE_TASK (fallback)
+  // ============================================
+  if (response.includes("ACTION: UPDATE_TASK")) {
+    const match = response.match(
+      /ACTION: UPDATE_TASK\|([^|]+)\|([^|]+)\|(.+?)(?:\n|$)/,
+    );
+    if (match) {
+      return {
+        type: "UPDATE_TASK",
+        searchQuery: cleanSearchQuery(match[1].trim()),
+        field: match[2].trim(),
+        newValue: match[3].trim(),
+      };
+    }
+  }
+
+  // ============================================
+  // MULTI-PARAMETER UPDATE_REMINDER
+  // ============================================
+  if (response.includes("ACTION: UPDATE_REMINDER") && response.includes("→")) {
+    const match = response.match(/ACTION: UPDATE_REMINDER\|([^|]+)\|(.+)$/);
+    if (match) {
+      const searchQuery = cleanValue(match[1]);
+      const updatesRaw = match[2].split("|");
+      const updates = {};
+
+      for (const update of updatesRaw) {
+        const [field, value] = update.split("→");
+        if (field && value) {
+          updates[cleanValue(field)] = cleanValue(value);
+        }
+      }
+
+      console.log(`🔄 MULTI-UPDATE_REMINDER action extracted:`, {
+        searchQuery,
+        updates,
+      });
+      return {
+        type: "UPDATE_REMINDER_MULTI",
+        searchQuery: searchQuery,
+        updates: updates,
+      };
+    }
+  }
+
+  // ============================================
+  // SINGLE UPDATE_REMINDER (fallback)
+  // ============================================
+  if (response.includes("ACTION: UPDATE_REMINDER")) {
+    const match = response.match(
+      /ACTION: UPDATE_REMINDER\|([^|]+)\|([^|]+)\|(.+?)(?:\n|$)/,
+    );
+    if (match) {
+      return {
+        type: "UPDATE_REMINDER",
+        searchQuery: cleanSearchQuery(match[1].trim()),
+        field: match[2].trim(),
+        newValue: match[3].trim(),
+      };
+    }
+  }
+
+  // ============================================
+  // MULTI-PARAMETER UPDATE_NOTE
+  // ============================================
+  if (response.includes("ACTION: UPDATE_NOTE") && response.includes("→")) {
+    const match = response.match(/ACTION: UPDATE_NOTE\|([^|]+)\|(.+)$/);
+    if (match) {
+      const searchQuery = cleanValue(match[1]);
+      const updatesRaw = match[2].split("|");
+      const updates = {};
+
+      for (const update of updatesRaw) {
+        const [field, value] = update.split("→");
+        if (field && value) {
+          updates[cleanValue(field)] = cleanValue(value);
+        }
+      }
+
+      console.log(`🔄 MULTI-UPDATE_NOTE action extracted:`, {
+        searchQuery,
+        updates,
+      });
+      return {
+        type: "UPDATE_NOTE_MULTI",
+        searchQuery: searchQuery,
+        updates: updates,
+      };
+    }
+  }
+
+  // ============================================
+  // SINGLE UPDATE_NOTE (fallback)
+  // ============================================
+  if (response.includes("ACTION: UPDATE_NOTE")) {
+    const match = response.match(
+      /ACTION: UPDATE_NOTE\|([^|]+)\|([^|]+)\|(.+?)(?:\n|$)/,
+    );
+    if (match) {
+      return {
+        type: "UPDATE_NOTE",
+        searchQuery: cleanSearchQuery(match[1].trim()),
+        field: match[2].trim(),
+        newValue: match[3].trim(),
+      };
+    }
+  }
+
   // ============================================
   // LIST ACTIONS
   // ============================================
@@ -683,55 +974,6 @@ function extractAction(response) {
   }
 
   // ============================================
-  // UPDATE ACTIONS
-  // ============================================
-
-  // UPDATE_TASK action
-  if (response.includes("ACTION: UPDATE_TASK")) {
-    const match = response.match(
-      /ACTION: UPDATE_TASK\|([^|]+)\|([^|]+)\|(.+?)(?:\n|$)/,
-    );
-    if (match) {
-      return {
-        type: "UPDATE_TASK",
-        searchQuery: cleanSearchQuery(match[1].trim()),
-        field: match[2].trim(),
-        newValue: match[3].trim(),
-      };
-    }
-  }
-
-  // UPDATE_REMINDER action
-  if (response.includes("ACTION: UPDATE_REMINDER")) {
-    const match = response.match(
-      /ACTION: UPDATE_REMINDER\|([^|]+)\|([^|]+)\|(.+?)(?:\n|$)/,
-    );
-    if (match) {
-      return {
-        type: "UPDATE_REMINDER",
-        searchQuery: cleanSearchQuery(match[1].trim()),
-        field: match[2].trim(),
-        newValue: match[3].trim(),
-      };
-    }
-  }
-
-  // UPDATE_NOTE action
-  if (response.includes("ACTION: UPDATE_NOTE")) {
-    const match = response.match(
-      /ACTION: UPDATE_NOTE\|([^|]+)\|([^|]+)\|(.+?)(?:\n|$)/,
-    );
-    if (match) {
-      return {
-        type: "UPDATE_NOTE",
-        searchQuery: cleanSearchQuery(match[1].trim()),
-        field: match[2].trim(),
-        newValue: match[3].trim(),
-      };
-    }
-  }
-
-  // ============================================
   // DELETE ACTIONS
   // ============================================
 
@@ -764,6 +1006,45 @@ function extractAction(response) {
       return {
         type: "DELETE_NOTE",
         searchQuery: cleanSearchQuery(match[1]),
+      };
+    }
+  }
+  // Add this after the DELETE actions section, before CREATE actions
+
+  // ============================================
+  // GET_BY_POSITION action (NEW)
+  // ============================================
+  if (response.includes("ACTION: GET_BY_POSITION")) {
+    const match = response.match(/ACTION: GET_BY_POSITION\|([^|\n]+)/);
+    if (match) {
+      let position = match[1].trim().toLowerCase();
+      console.log(
+        `📍 GET_BY_POSITION action extracted, position: "${position}"`,
+      );
+
+      // Convert word positions to numbers
+      const positionMap = {
+        first: 1,
+        second: 2,
+        third: 3,
+        fourth: 4,
+        fifth: 5,
+        sixth: 6,
+        seventh: 7,
+        eighth: 8,
+        ninth: 9,
+        tenth: 10,
+        last: "last",
+      };
+
+      let positionValue = positionMap[position] || position;
+      if (!isNaN(parseInt(positionValue))) {
+        positionValue = parseInt(positionValue);
+      }
+
+      return {
+        type: "GET_BY_POSITION",
+        position: positionValue,
       };
     }
   }
@@ -836,6 +1117,7 @@ function extractAction(response) {
 
   return null;
 }
+
 // Function to clear conversation history
 function clearConversation(sessionId) {
   conversationHistory.delete(sessionId);

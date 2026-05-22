@@ -64,6 +64,11 @@ const {
   getReminderByTitle,
   getQuickOverview,
   getDashboardStats,
+  setLastDisplayedTable,
+  getLastDisplayedTable,
+  clearLastDisplayedTable,
+  parsePositionReference,
+  getItemByPosition,
 } = require("./services/dataFetcher");
 const { parseDate, testDateParser } = require("./services/dateParser");
 const { applyDateTimeUpdate } = require("./services/dateUpdate");
@@ -225,31 +230,7 @@ function formatQuickOverview(overview) {
 
   return output;
 }
-function formatTaskListWithDetailsTable(tasks, action) {
-  let table =
-    "| Task Title | Priority | Due Date | Status | Reminder | Note |\n";
-  table += "|------------|----------|----------|--------|----------|------|\n";
 
-  for (const task of tasks) {
-    const dueDate = task.dueDate ? formatISTDate(task.dueDate) : "No date";
-    const status = task.completed ? "✅ Done" : "⏳ Pending";
-    const reminder = task.reminder
-      ? formatISTDate(task.reminder.remindAt)
-      : "No reminder";
-    const note = task.note ? (task.note.content ? "Yes" : "Empty") : "No note";
-
-    table += `| ${task.title} | ${task.priority} | ${dueDate} | ${status} | ${reminder} | ${note} |\n`;
-  }
-
-  let title = "Tasks";
-  if (action.status === "pending") title = "Pending Tasks";
-  if (action.status === "important") title = "Important Tasks";
-  if (action.status === "overdue") title = "Overdue Tasks";
-  if (action.special === "weekend") title = "Weekend Tasks";
-  if (action.special === "has-reminder") title = "Tasks with Reminders";
-
-  return `📋 **${title}** (${tasks.length} found):\n\n${table}`;
-}
 // Add these helper functions to server.js
 /**
  * Format a single note as table
@@ -298,6 +279,271 @@ function formatSingleTaskTable(task, reminder = null, note = null) {
 
   return response;
 }
+
+// Add after existing functions in server.js
+
+/**
+ * Get note content with full text (no truncation)
+ */
+async function getNoteContent(noteTitle) {
+  try {
+    console.log(`📝 Fetching content for note: "${noteTitle}"`);
+
+    const note = await Note.findOne({
+      title: { $regex: new RegExp(`^${escapeRegex(noteTitle)}$`, "i") },
+    });
+
+    if (!note) {
+      return null;
+    }
+
+    // Get linked task info
+    let linkedTask = null;
+    if (note.taskId) {
+      linkedTask = await Task.findById(note.taskId);
+    }
+
+    return {
+      title: note.title,
+      content: note.content || "Empty",
+      createdAt: note.createdAt,
+      updatedAt: note.updatedAt,
+      linkedTask: linkedTask,
+    };
+  } catch (error) {
+    console.error("Error getting note content:", error);
+    return null;
+  }
+}
+
+/**
+ * Format note content response
+ */
+function formatNoteContent(noteData) {
+  if (!noteData) {
+    return "📝 Note not found.";
+  }
+
+  let response = `📝 **Note: "${noteData.title}"**\n`;
+  response += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+  response += `📄 **Content:**\n${noteData.content}\n\n`;
+  response += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+  response += `📅 **Created:** ${formatISTDate(noteData.createdAt)}\n`;
+
+  if (noteData.updatedAt && noteData.updatedAt !== noteData.createdAt) {
+    response += `✏️ **Last Updated:** ${formatISTDate(noteData.updatedAt)}\n`;
+  }
+
+  if (noteData.linkedTask) {
+    response += `🔗 **Linked Task:** ${noteData.linkedTask.title}\n`;
+  } else {
+    response += `📋 **Linked Task:** None (standalone note)\n`;
+  }
+
+  return response;
+}
+
+/**
+ * Get tasks due in next N days
+ */
+async function getTasksDueInNextDays(days) {
+  const now = new Date();
+  const startOfToday = getISTStartOfDay();
+  const endDate = new Date(startOfToday);
+  endDate.setDate(startOfToday.getDate() + days);
+  endDate.setHours(23, 59, 59, 999);
+
+  // Convert to UTC for query
+  const endUTC = new Date(endDate.getTime() - 5.5 * 60 * 60 * 1000);
+
+  const tasks = await Task.find({
+    dueDate: { $gte: startOfToday, $lte: endUTC },
+    completed: false,
+  }).sort({ dueDate: 1 });
+
+  // Fetch reminders and notes
+  const tasksWithDeps = await Promise.all(
+    tasks.map(async (task) => {
+      const reminder = task.reminderId
+        ? await Reminder.findById(task.reminderId)
+        : null;
+      const note = task.noteId ? await Note.findById(task.noteId) : null;
+      return { ...task.toObject(), reminder, note };
+    }),
+  );
+
+  return tasksWithDeps;
+}
+
+/**
+ * Handle multi-filter get tasks
+ */
+async function getTasksWithFilters(filters) {
+  let query = { completed: false }; // Default to pending unless specified otherwise
+
+  for (const filter of filters) {
+    const f = filter.toLowerCase();
+
+    // Status filters
+    if (f === "completed") {
+      query.completed = true;
+    } else if (f === "pending") {
+      query.completed = false;
+    }
+
+    // Priority filters
+    else if (f === "high") {
+      query.priority = "high";
+    } else if (f === "medium") {
+      query.priority = "medium";
+    } else if (f === "low") {
+      query.priority = "low";
+    } else if (f === "important") {
+      query.priority = "important";
+    }
+
+    // Special filters
+    else if (f === "has-reminder" || f === "with reminder") {
+      query.reminderId = { $ne: null };
+    } else if (f === "no-reminder" || f === "without reminder") {
+      query.reminderId = null;
+    } else if (f === "has-note" || f === "with note") {
+      query.noteId = { $ne: null };
+    } else if (f === "no-note" || f === "without note") {
+      query.noteId = null;
+    }
+
+    // Date filters
+    else if (f === "today") {
+      const { start, end } = getISTDayRange();
+      query.dueDate = { $gte: start, $lt: end };
+    } else if (f === "tomorrow") {
+      const tomorrowStart = getISTStartOfNextDay();
+      const dayAfter = new Date(tomorrowStart.getTime() + 24 * 60 * 60 * 1000);
+      query.dueDate = { $gte: tomorrowStart, $lt: dayAfter };
+    } else if (f === "overdue") {
+      const todayStart = getISTStartOfDay();
+      query.dueDate = { $lt: todayStart };
+      query.completed = false;
+    }
+  }
+
+  let tasks = await Task.find(query)
+    .sort({ dueDate: 1, createdAt: -1 })
+    .limit(50);
+
+  // Fetch dependencies
+  const tasksWithDeps = await Promise.all(
+    tasks.map(async (task) => {
+      const reminder = task.reminderId
+        ? await Reminder.findById(task.reminderId)
+        : null;
+      const note = task.noteId ? await Note.findById(task.noteId) : null;
+      return { ...task.toObject(), reminder, note };
+    }),
+  );
+
+  return tasksWithDeps;
+}
+
+/**
+ * Handle multi-field task updates
+ */
+async function updateTaskMultiFields(searchQuery, updates) {
+  const taskToUpdate = await findTaskByUpdateSearch(searchQuery);
+
+  if (!taskToUpdate) {
+    return { success: false, error: `Task "${searchQuery}" not found` };
+  }
+
+  const changes = [];
+  const updateLog = {};
+  let oldTitle = taskToUpdate.title;
+
+  for (const [field, value] of Object.entries(updates)) {
+    switch (field) {
+      case "dueDate":
+        const oldDueDate = taskToUpdate.dueDate
+          ? new Date(taskToUpdate.dueDate)
+          : null;
+        const { date: newDueDate, error: dueError } = await applyDateTimeUpdate(
+          oldDueDate,
+          value,
+        );
+
+        if (dueError || !newDueDate) {
+          changes.push(
+            `❌ Due date: ${dueError || `Failed to parse ${value}`}`,
+          );
+        } else {
+          taskToUpdate.dueDate = newDueDate;
+          changes.push(`✅ Due date: ${formatISTDate(newDueDate)}`);
+          updateLog.dueDate = true;
+        }
+        break;
+
+      case "priority":
+        if (
+          ["low", "medium", "high", "important"].includes(value.toLowerCase())
+        ) {
+          taskToUpdate.priority = value.toLowerCase();
+          changes.push(`✅ Priority: ${value}`);
+          updateLog.priority = true;
+        } else {
+          changes.push(`❌ Priority: Invalid value "${value}"`);
+        }
+        break;
+
+      case "title":
+        taskToUpdate.title = value;
+        changes.push(`✅ Title: "${oldTitle}" → "${value}"`);
+        updateLog.title = true;
+        break;
+
+      case "completed":
+        const isCompleted =
+          value === "true" || value === "completed" || value === "done";
+        taskToUpdate.completed = isCompleted;
+        changes.push(`✅ Status: ${isCompleted ? "Completed" : "Pending"}`);
+        updateLog.completed = true;
+        break;
+
+      case "note":
+        let existingNote = taskToUpdate.noteId
+          ? await Note.findById(taskToUpdate.noteId)
+          : null;
+        if (existingNote) {
+          existingNote.content = value;
+          await existingNote.save();
+          changes.push(`✅ Note content updated`);
+        } else {
+          const newNote = new Note({
+            title: `Note for ${taskToUpdate.title}`,
+            content: value,
+            taskId: taskToUpdate._id,
+          });
+          await newNote.save();
+          taskToUpdate.noteId = newNote._id;
+          changes.push(`✅ New note created with content`);
+        }
+        break;
+
+      default:
+        changes.push(`❌ Unknown field: ${field}`);
+    }
+  }
+
+  await taskToUpdate.save();
+  await updateDependencies(taskToUpdate, updateLog);
+
+  return {
+    success: true,
+    task: taskToUpdate,
+    changes: changes,
+    message: `✅ Task "${taskToUpdate.title}" updated:\n${changes.join("\n")}`,
+  };
+}
+
 function formatSingleNoteTable(noteData) {
   if (!noteData || !noteData.note) {
     return "📝 Note not found.";
@@ -341,44 +587,6 @@ function formatSingleNoteTable(noteData) {
   return table;
 }
 
-function formatNotesAsTable(notes) {
-  if (!notes || notes.length === 0) return "No notes found.";
-
-  // For multiple notes, set the FIRST note as last mentioned (most recent)
-  if (notes.length > 0) {
-    const firstNote = notes[0];
-    setLastMentionedNote(firstNote.title, firstNote._id, firstNote);
-    console.log(
-      `📌 Set last mentioned note (first of ${notes.length}): "${firstNote.title}"`,
-    );
-
-    // Also set linked task if exists for the first note
-    if (firstNote.linkedTask) {
-      setLastMentionedTask(
-        firstNote.linkedTask.title,
-        firstNote.linkedTask._id,
-        firstNote.linkedTask,
-      );
-    }
-  }
-
-  let table = "| Note Title | Content Preview | Linked Task | Created |\n";
-  table +=
-    "|------------|----------------|-------------|-----------------------|\n";
-
-  for (const note of notes) {
-    let preview = note.content || "Empty";
-    preview = preview.replace(/\n/g, " ").substring(0, 60);
-    if (preview.length === 60) preview += "...";
-
-    const linkedTask = note.linkedTask ? note.linkedTask.title : "Standalone";
-    const created = note.createdAt ? formatISTDate(note.createdAt) : "Unknown";
-
-    table += `| ${note.title} | ${preview} | ${linkedTask} | ${created} |\n`;
-  }
-
-  return `Found ${notes.length} note(s):\n\n${table}\n\n💡 You can ask about any of these by name, or ask "Show **its task**" for the first note.`;
-}
 function formatSingleReminderTable(reminderData) {
   if (!reminderData || !reminderData.reminder) {
     return "⏰ Reminder not found.";
@@ -495,22 +703,113 @@ function formatSingleReminderTable(reminderData) {
 
   return table;
 }
-function formatRecentTasksTable(tasks) {
-  if (!tasks || tasks.length === 0) {
-    return "📋 No recent tasks found.";
+// Update formatTaskListWithDetailsTable function
+function formatTaskListWithDetailsTable(tasks, action) {
+  // Store the indexed table FIRST
+  setLastDisplayedTable("tasks", tasks, action);
+
+  let table =
+    "| # | Task Title | Priority | Due Date | Status | Reminder | Note |\n";
+  table +=
+    "|---|------------|----------|----------|--------|----------|------|\n";
+
+  for (let i = 0; i < tasks.length; i++) {
+    const task = tasks[i];
+    const dueDate = task.dueDate ? formatISTDate(task.dueDate) : "No date";
+    const status = task.completed ? "✅ Done" : "⏳ Pending";
+    const reminder = task.reminder
+      ? formatISTDate(task.reminder.remindAt)
+      : "No reminder";
+    const note = task.note ? (task.note.content ? "Yes" : "Empty") : "No note";
+
+    table += `| ${i + 1} | ${task.title} | ${task.priority} | ${dueDate} | ${status} | ${reminder} | ${note} |\n`;
   }
 
-  let table = "| Task Title | Priority | Due Date | Status | Created |\n";
-  table += "|------------|----------|----------|--------|---------|\n";
+  let title = "Tasks";
+  if (action?.status === "pending") title = "Pending Tasks";
+  if (action?.status === "important") title = "Important Tasks";
+  if (action?.status === "overdue") title = "Overdue Tasks";
+  if (action?.special === "weekend") title = "Weekend Tasks";
+  if (action?.special === "has-reminder") title = "Tasks with Reminders";
 
-  for (const task of tasks) {
+  let footer = `\n💡 You can now ask: "Give details of **first one**" or "What about **second task**" or "Show me **the last one**"`;
+
+  return `📋 **${title}** (${tasks.length} found):\n\n${table}${footer}`;
+}
+
+// Update formatRemindersAsTable function
+function formatRemindersAsTable(reminders) {
+  if (!reminders || reminders.length === 0) return "No reminders found.";
+
+  // Store the indexed table
+  setLastDisplayedTable("reminders", reminders);
+
+  let table = "| # | Reminder Title | Time | Linked Task |\n";
+  table += "|---|----------------|------|-------------|\n";
+
+  for (let i = 0; i < reminders.length; i++) {
+    const reminder = reminders[i];
+    const title = reminder.title || "Untitled";
+    const time = reminder.remindAt
+      ? formatISTDate(reminder.remindAt)
+      : "No time set";
+    const linkedTask = reminder.linkedTask ? reminder.linkedTask.title : "None";
+
+    table += `| ${i + 1} | ${title} | ${time} | ${linkedTask} |\n`;
+  }
+
+  let footer = `\n💡 You can now ask: "Give details of **first one**" or "What about **second reminder**" or "Show me **the last one**"`;
+
+  return `Found ${reminders.length} reminder(s):\n\n${table}${footer}`;
+}
+
+// Update formatNotesAsTable function
+function formatNotesAsTable(notes) {
+  if (!notes || notes.length === 0) return "No notes found.";
+
+  // Store the indexed table
+  setLastDisplayedTable("notes", notes);
+
+  let table = "| # | Note Title | Content Preview | Linked Task | Created |\n";
+  table += "|---|------------|----------------|-------------|-------|\n";
+
+  for (let i = 0; i < notes.length; i++) {
+    const note = notes[i];
+    let preview = note.content || "Empty";
+    preview = preview.replace(/\n/g, " ").substring(0, 60);
+    if (preview.length === 60) preview += "...";
+    const linkedTask = note.linkedTask ? note.linkedTask.title : "Standalone";
+    const created = note.createdAt ? formatISTDate(note.createdAt) : "Unknown";
+
+    table += `| ${i + 1} | ${note.title} | ${preview} | ${linkedTask} | ${created} |\n`;
+  }
+
+  let footer = `\n💡 You can now ask: "Give details of **first one**" or "What about **second note**" or "Show me **the last one**"`;
+
+  return `Found ${notes.length} note(s):\n\n${table}${footer}`;
+}
+
+// Update formatRecentTasksTable function
+function formatRecentTasksTable(tasks) {
+  if (!tasks || tasks.length === 0) return "📋 No recent tasks found.";
+
+  // Store the indexed table
+  setLastDisplayedTable("tasks", tasks, { type: "recent" });
+
+  let table = "| # | Task Title | Priority | Due Date | Status | Created |\n";
+  table += "|---|------------|----------|----------|--------|---------|\n";
+
+  for (let i = 0; i < tasks.length; i++) {
+    const task = tasks[i];
     const dueDate = task.dueDate ? formatISTDate(task.dueDate) : "No date";
     const status = task.completed ? "✅ Done" : "⏳ Pending";
     const created = formatISTDate(task.createdAt);
-    table += `| ${task.title} | ${task.priority} | ${dueDate} | ${status} | ${created} |\n`;
+    table += `| ${i + 1} | ${task.title} | ${task.priority} | ${dueDate} | ${status} | ${created} |\n`;
   }
 
-  return `📋 **Recently Created Tasks** (Last ${tasks.length}):\n\n${table}`;
+  let footer = `\n💡 You can now ask: "Give details of **first one**" or "What about **second task**"`;
+
+  return `📋 **Recently Created Tasks** (Last ${tasks.length}):\n\n${table}${footer}`;
 }
 
 function formatRecentRemindersTable(reminders) {
@@ -588,30 +887,6 @@ function formatTaskListAsTable(tasks, filters = {}) {
   }
 
   return `Found ${tasks.length} task(s):\n\n${table}`;
-}
-
-function formatRemindersAsTable(reminders) {
-  if (!reminders || reminders.length === 0) return "No reminders found.";
-
-  let table = "| Reminder Title | Time | Linked Task |\n";
-  table += "|----------------|------|-------------|\n";
-
-  for (const reminder of reminders) {
-    const title = reminder.title || "Untitled";
-    const time = reminder.remindAt
-      ? formatISTDate(reminder.remindAt)
-      : "No time set";
-    const linkedTask = reminder.linkedTask ? reminder.linkedTask.title : "None";
-
-    table += `| ${title} | ${time} | ${linkedTask} |\n`;
-  }
-
-  // Add hint about context
-  if (reminders.length > 0) {
-    table += `\n💡 You can now ask about the first reminder: "Show **its task**" or "Get **details of this reminder**"`;
-  }
-
-  return `Found ${reminders.length} recent reminder(s):\n\n${table}`;
 }
 
 // ============ API ENDPOINTS ============
@@ -932,6 +1207,225 @@ app.post("/api/chat", async (req, res) => {
           finalReply = successMessage.trim();
           break;
 
+        // Add after existing cases in the chat endpoint
+
+        case "GET_BY_POSITION":
+          console.log(`📍 Getting item by position: "${action.position}"`);
+
+          const tableData = getLastDisplayedTable();
+
+          if (!tableData) {
+            finalReply = `📋 No table data available. Please list tasks, reminders, or notes first (e.g., "list tasks", "show reminders", "get notes").`;
+            break;
+          }
+
+          const positionResult = getItemByPosition({ value: action.position });
+
+          if (positionResult.error) {
+            finalReply = positionResult.error;
+            break;
+          }
+
+          // Display the item based on its type
+          const item = positionResult.item;
+          const itemType = positionResult.type;
+          const itemIndex = positionResult.index;
+
+          console.log(
+            `✅ Found item at position ${itemIndex}: "${item.title}" (${itemType})`,
+          );
+
+          switch (itemType) {
+            case "tasks":
+              const reminder = item.reminderId
+                ? await Reminder.findById(item.reminderId)
+                : null;
+              const note = item.noteId
+                ? await Note.findById(item.noteId)
+                : null;
+              finalReply = formatSingleTaskTable(item, reminder, note);
+              finalReply += `\n\n📍 This was item #${itemIndex} from your previous list.`;
+              break;
+
+            case "reminders":
+              const linkedTask = item.taskId
+                ? await Task.findById(item.taskId)
+                : null;
+              finalReply = formatSingleReminderTable({
+                reminder: item,
+                linkedTask: linkedTask,
+              });
+              finalReply += `\n\n📍 This was reminder #${itemIndex} from your previous list.`;
+              break;
+
+            case "notes":
+              const linkedTaskForNote = item.taskId
+                ? await Task.findById(item.taskId)
+                : null;
+              finalReply = formatSingleNoteTable({
+                note: item,
+                linkedTask: linkedTaskForNote,
+              });
+              finalReply += `\n\n📍 This was note #${itemIndex} from your previous list.`;
+              break;
+
+            default:
+              finalReply = `📋 Found: "${item.title}" (${itemType}) - Position #${itemIndex}`;
+          }
+          break;
+
+        case "GET_NOTE_CONTENT":
+          console.log(`📝 Getting note content: "${action.searchQuery}"`);
+
+          const cleanNoteContentQuery = action.searchQuery
+            .replace(
+              /\b(note|content|of|the|show|read|display|get|me|what does|say)\b/gi,
+              "",
+            )
+            .trim();
+
+          const noteContentData = await getNoteContent(cleanNoteContentQuery);
+
+          if (!noteContentData) {
+            finalReply = `📝 Note "${action.searchQuery}" not found.`;
+          } else {
+            finalReply = formatNoteContent(noteContentData);
+          }
+          break;
+
+        case "GET_TASK_MULTI":
+          console.log(`🔍 Multi-filter get tasks:`, action.filters);
+
+          const filteredTasks = await getTasksWithFilters(action.filters);
+
+          if (filteredTasks.length === 0) {
+            finalReply = `📋 No tasks found matching: ${action.filters.join(", ")}`;
+          } else {
+            finalReply = formatTaskListWithDetailsTable(filteredTasks, {
+              status: "filtered",
+            });
+
+            // Set first task as last mentioned
+            setLastMentionedTask(
+              filteredTasks[0].title,
+              filteredTasks[0]._id,
+              filteredTasks[0],
+            );
+          }
+          break;
+
+        case "UPDATE_TASK_MULTI":
+          console.log(`🔄 Multi-field update task:`, {
+            searchQuery: action.searchQuery,
+            updates: action.updates,
+          });
+
+          const multiUpdateResult = await updateTaskMultiFields(
+            action.searchQuery,
+            action.updates,
+          );
+
+          if (!multiUpdateResult.success) {
+            finalReply = `❌ ${multiUpdateResult.error}`;
+          } else {
+            finalReply = multiUpdateResult.message;
+            setLastMentionedTask(
+              multiUpdateResult.task.title,
+              multiUpdateResult.task._id,
+              multiUpdateResult.task,
+            );
+          }
+          break;
+
+        case "UPDATE_REMINDER_MULTI":
+          console.log(`🔄 Multi-field update reminder:`, action.updates);
+
+          const reminderToUpdateMulti = await findReminderByUpdateSearch(
+            action.searchQuery,
+          );
+
+          if (!reminderToUpdateMulti) {
+            finalReply = `❌ Reminder "${action.searchQuery}" not found.`;
+          } else {
+            const reminderChanges = [];
+
+            for (const [field, value] of Object.entries(action.updates)) {
+              if (field === "remindAt") {
+                const oldRemindAt = reminderToUpdateMulti.remindAt
+                  ? new Date(reminderToUpdateMulti.remindAt)
+                  : null;
+                const { date: newRemindAt, error: remindError } =
+                  await applyDateTimeUpdate(oldRemindAt, value);
+
+                if (remindError || !newRemindAt) {
+                  reminderChanges.push(
+                    `❌ Remind at: ${remindError || `Failed to parse ${value}`}`,
+                  );
+                } else {
+                  reminderToUpdateMulti.remindAt = newRemindAt;
+                  reminderChanges.push(
+                    `✅ Remind at: ${formatISTDate(newRemindAt)}`,
+                  );
+                }
+              } else if (field === "title") {
+                const oldTitle = reminderToUpdateMulti.title;
+                reminderToUpdateMulti.title = value;
+                reminderChanges.push(`✅ Title: "${oldTitle}" → "${value}"`);
+              }
+            }
+
+            await reminderToUpdateMulti.save();
+
+            if (reminderToUpdateMulti.taskId) {
+              const linkedTask = await Task.findById(
+                reminderToUpdateMulti.taskId,
+              );
+              if (
+                linkedTask &&
+                reminderChanges.some((c) => c.includes("Remind at"))
+              ) {
+                linkedTask.dueDate = reminderToUpdateMulti.remindAt;
+                await linkedTask.save();
+                reminderChanges.push(
+                  `✅ Linked task due date updated to match`,
+                );
+              }
+            }
+
+            finalReply = `✅ Reminder updated:\n${reminderChanges.join("\n")}`;
+          }
+          break;
+
+        case "UPDATE_NOTE_MULTI":
+          console.log(`🔄 Multi-field update note:`, action.updates);
+
+          const noteToUpdateMulti = await Note.findOne({
+            title: {
+              $regex: new RegExp(`^${escapeRegex(action.searchQuery)}$`, "i"),
+            },
+          });
+
+          if (!noteToUpdateMulti) {
+            finalReply = `❌ Note "${action.searchQuery}" not found.`;
+          } else {
+            const noteChanges = [];
+
+            for (const [field, value] of Object.entries(action.updates)) {
+              if (field === "title") {
+                const oldTitle = noteToUpdateMulti.title;
+                noteToUpdateMulti.title = value;
+                noteChanges.push(`✅ Title: "${oldTitle}" → "${value}"`);
+              } else if (field === "content") {
+                noteToUpdateMulti.content = value;
+                noteChanges.push(`✅ Content updated`);
+              }
+            }
+
+            await noteToUpdateMulti.save();
+            finalReply = `✅ Note updated:\n${noteChanges.join("\n")}`;
+          }
+          break;
+
         case "SHOW_STATS":
           console.log(`📊 Getting task statistics`);
           const stats = await getDashboardStats();
@@ -1133,6 +1627,9 @@ app.post("/api/chat", async (req, res) => {
             const endUTC = new Date(sundayEnd.getTime() - 5.5 * 60 * 60 * 1000);
             query.dueDate = { $gte: startUTC, $lte: endUTC };
           }
+          // Add this inside the LIST_TASKS case, in the due date filter section
+
+          // NEXT X DAYS filter (NEW)
 
           // Has reminder filter
           if (filters.hasReminder) {
@@ -1359,32 +1856,14 @@ app.post("/api/chat", async (req, res) => {
           actionResult = taskToUpdate;
 
           break;
-        case "GET_NOTE":
-          console.log(`📝 Getting note: "${action.searchQuery}"`);
 
-          // Clean the query
-          let cleanNoteQuery = action.searchQuery
-            .replace(/\b(note|reminder|task|details?)\b/gi, "")
-            .trim();
-
-          const noteData = await getNoteByTitle(cleanNoteQuery);
-
-          if (!noteData || !noteData.note) {
-            finalReply = `📝 Note "${action.searchQuery}" not found.`;
-          } else {
-            // The formatSingleNoteTable will set all references
-            finalReply = formatSingleNoteTable(noteData);
-            console.log("The format table is working");
-            // References are already set inside formatSingleNoteTable
-          }
-          break;
         case "GET_TASK":
           console.log(`📋 Getting task: "${action.searchQuery}"`);
 
           let taskQuery = action.searchQuery;
-          taskToGet = null;
-          reminderData = null;
-          noteData = null;
+          let taskToGet = null;
+          let reminderDataForTask = null; // Renamed to avoid conflict
+          let noteDataForTask = null; // Renamed to avoid conflict
 
           if (taskQuery === "THIS_TASK_REFERENCE") {
             const lastTaskId = getLastMentionedTaskId();
@@ -1392,8 +1871,8 @@ app.post("/api/chat", async (req, res) => {
               const result = await getTaskWithDependencies(lastTaskId);
               if (result && result.task) {
                 taskToGet = result.task;
-                reminderData = result.reminder;
-                noteData = result.note;
+                reminderDataForTask = result.reminder;
+                noteDataForTask = result.note;
               }
             }
           } else {
@@ -1404,10 +1883,10 @@ app.post("/api/chat", async (req, res) => {
             });
 
             if (taskToGet) {
-              reminderData = taskToGet.reminderId
+              reminderDataForTask = taskToGet.reminderId
                 ? await Reminder.findById(taskToGet.reminderId)
                 : null;
-              noteData = taskToGet.noteId
+              noteDataForTask = taskToGet.noteId
                 ? await Note.findById(taskToGet.noteId)
                 : null;
             }
@@ -1419,10 +1898,29 @@ app.post("/api/chat", async (req, res) => {
             // The formatSingleTaskTable will set all references
             finalReply = formatSingleTaskTable(
               taskToGet,
-              reminderData,
-              noteData,
+              reminderDataForTask,
+              noteDataForTask,
             );
             // References are already set inside formatSingleTaskTable
+          }
+          break;
+
+        case "GET_NOTE":
+          console.log(`📝 Getting note: "${action.searchQuery}"`);
+
+          // Clean the query
+          let cleanNoteQuery = action.searchQuery
+            .replace(/\b(note|reminder|task|details?)\b/gi, "")
+            .trim();
+
+          const noteDataResult = await getNoteByTitle(cleanNoteQuery);
+
+          if (!noteDataResult || !noteDataResult.note) {
+            finalReply = `📝 Note "${action.searchQuery}" not found.`;
+          } else {
+            // The formatSingleNoteTable will set all references
+            finalReply = formatSingleNoteTable(noteDataResult);
+            // References are already set inside formatSingleNoteTable
           }
           break;
 
@@ -1433,13 +1931,14 @@ app.post("/api/chat", async (req, res) => {
             .replace(/\b(note|reminder|task|details?)\b/gi, "")
             .trim();
 
-          const reminderData = await getReminderByTitle(cleanReminderQuery);
+          const reminderDataResult =
+            await getReminderByTitle(cleanReminderQuery);
 
-          if (!reminderData || !reminderData.reminder) {
+          if (!reminderDataResult || !reminderDataResult.reminder) {
             finalReply = `⏰ Reminder "${action.searchQuery}" not found.`;
           } else {
             // The formatSingleReminderTable will set all references
-            finalReply = formatSingleReminderTable(reminderData);
+            finalReply = formatSingleReminderTable(reminderDataResult);
             // References are already set inside formatSingleReminderTable
           }
           break;

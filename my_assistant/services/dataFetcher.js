@@ -32,6 +32,167 @@ let lastMentionedNoteData = null;
 
 // NEW: Generic last mentioned entity (any type)
 let lastMentionedEntity = null; // { type, title, id, data }
+// Add these variables at the top of dataFetcher.js (after the other lastMentioned variables)
+
+// Store the last displayed table/list with indexed items
+let lastDisplayedTable = null; // { type, items, timestamp, context }
+
+// Add these functions to dataFetcher.js
+function setLastDisplayedTable(type, items, context = null) {
+  lastDisplayedTable = {
+    type: type, // 'tasks', 'reminders', 'notes'
+    items: items.map((item, index) => ({
+      index: index + 1, // 1-based index for user-friendliness
+      originalIndex: index,
+      data: item,
+      title: item.title || item.name || "Untitled",
+    })),
+    timestamp: Date.now(),
+    context: context,
+    count: items.length,
+  };
+  console.log(`📊 Table indexed: ${type} with ${items.length} items`);
+  return lastDisplayedTable;
+}
+
+function getLastDisplayedTable() {
+  // Check if table is stale (older than 30 minutes)
+  if (
+    lastDisplayedTable &&
+    Date.now() - lastDisplayedTable.timestamp > 30 * 60 * 1000
+  ) {
+    console.log(`📊 Last displayed table expired (older than 30 minutes)`);
+    return null;
+  }
+  return lastDisplayedTable;
+}
+
+function clearLastDisplayedTable() {
+  lastDisplayedTable = null;
+  console.log(`📊 Cleared last displayed table`);
+}
+
+// Helper function to parse position references (first, second, third, last, etc.)
+function parsePositionReference(query) {
+  const lowerQuery = query.toLowerCase();
+
+  // Map of words to numbers
+  const positionMap = {
+    first: 1,
+    second: 2,
+    third: 3,
+    fourth: 4,
+    fifth: 5,
+    sixth: 6,
+    seventh: 7,
+    eighth: 8,
+    ninth: 9,
+    tenth: 10,
+    "1st": 1,
+    "2nd": 2,
+    "3rd": 3,
+    "4th": 4,
+    "5th": 5,
+    "6th": 6,
+    "7th": 7,
+    "8th": 8,
+    "9th": 9,
+    "10th": 10,
+    last: "last",
+    previous: "previous",
+    next: "next",
+  };
+
+  // Check for "first one", "second task", etc.
+  for (const [word, number] of Object.entries(positionMap)) {
+    const patterns = [
+      new RegExp(
+        `\\b${word}\\s+(?:one|item|task|reminder|note|entry)s?\\b`,
+        "i",
+      ),
+      new RegExp(
+        `\\b(?:the\\s+)?${word}\\s+(?:one|item|task|reminder|note|entry)\\b`,
+        "i",
+      ),
+      new RegExp(`\\b${word}\\s+(?:element|row)\\b`, "i"),
+      new RegExp(`\\b(?:get|show|tell|give\\s+me)\\s+${word}\\b`, "i"),
+      new RegExp(`\\b${word}\\s+(?:details?|info|information)\\b`, "i"),
+    ];
+
+    for (const pattern of patterns) {
+      if (pattern.test(lowerQuery)) {
+        return { type: "position", value: number };
+      }
+    }
+  }
+
+  // Check for "the last one"
+  if (
+    /\b(?:the\s+)?last\s+(?:one|item|task|reminder|note|entry)\b/i.test(
+      lowerQuery,
+    )
+  ) {
+    return { type: "position", value: "last" };
+  }
+
+  // Check for ordinal numbers in text (e.g., "the 3rd item")
+  const ordinalMatch = lowerQuery.match(
+    /\b(?:the\s+)?(\d+)(?:st|nd|rd|th)\s+(?:one|item|task|reminder|note|entry)\b/i,
+  );
+  if (ordinalMatch) {
+    return { type: "position", value: parseInt(ordinalMatch[1]) };
+  }
+
+  // Check for simple number reference (e.g., "item 5", "task number 3")
+  const numberMatch = lowerQuery.match(
+    /\b(?:item|task|reminder|note|entry)\s+(?:number\s+)?(\d+)\b/i,
+  );
+  if (numberMatch) {
+    return { type: "position", value: parseInt(numberMatch[1]) };
+  }
+
+  return null;
+}
+
+// Function to get item by position from last displayed table
+function getItemByPosition(positionRef, table = null) {
+  const currentTable = table || getLastDisplayedTable();
+
+  if (!currentTable) {
+    return { error: "No table data available. Please list items first." };
+  }
+
+  let targetIndex;
+
+  if (positionRef.value === "last") {
+    targetIndex = currentTable.items.length;
+  } else if (typeof positionRef.value === "number") {
+    targetIndex = positionRef.value;
+  } else {
+    return { error: `Invalid position reference: ${positionRef.value}` };
+  }
+
+  if (targetIndex < 1 || targetIndex > currentTable.items.length) {
+    return {
+      error: `Position ${targetIndex} not found. The table has ${currentTable.items.length} item(s).`,
+      totalItems: currentTable.items.length,
+    };
+  }
+
+  const item = currentTable.items.find((i) => i.index === targetIndex);
+  if (!item) {
+    return { error: `Item at position ${targetIndex} not found.` };
+  }
+
+  return {
+    success: true,
+    item: item.data,
+    index: item.index,
+    title: item.title,
+    type: currentTable.type,
+  };
+}
+
 function cleanMessage(message) {
   return message.toLowerCase().trim();
 }
@@ -1046,7 +1207,14 @@ async function fetchRelevantData(userMessage) {
   let message = userMessage.toLowerCase();
   let context = { tasks: [], notes: [], reminders: [] };
 
+  // Wrap extractEntityName to auto-correct typos
+  const originalExtractEntityName = extractEntityName;
+  extractEntityName = function (message) {
+    const correctedMessage = correctCommonTypos(message);
+    return originalExtractEntityName(correctedMessage);
+  };
   let extractedName = extractEntityName(message);
+
   console.log("🎯 Extracted entity:", extractedName);
 
   // ============================================
@@ -1519,6 +1687,48 @@ function formatContextForAI(context) {
 
   return output;
 }
+function correctCommonTypos(text) {
+  const corrections = {
+    // Priority typos
+    prority: "priority",
+    priorty: "priority",
+    priorety: "priority",
+
+    // Status typos
+    compleated: "completed",
+    completd: "completed",
+    pendng: "pending",
+    pendig: "pending",
+
+    // Entity typos
+    remider: "reminder",
+    remiders: "reminders",
+    remnders: "reminders",
+    nots: "notes",
+    taskes: "tasks",
+    taskk: "task",
+
+    // Date typos
+    tomorow: "tomorrow",
+    tommorow: "tomorrow",
+    tommorrow: "tomorrow",
+    yesturday: "yesterday",
+
+    // Content typos
+    contenet: "content",
+    conten: "content",
+    cntent: "content",
+  };
+
+  let corrected = text.toLowerCase();
+  for (const [typo, correct] of Object.entries(corrections)) {
+    const regex = new RegExp(`\\b${typo}\\b`, "gi");
+    corrected = corrected.replace(regex, correct);
+  }
+
+  return corrected;
+}
+
 /**
  * Get productivity statistics with time-based analysis
  * @returns {Promise<Object>} - Productivity statistics
@@ -1575,4 +1785,9 @@ module.exports = {
   getReminderByTitle,
   getQuickOverview,
   getDashboardStats,
+  setLastDisplayedTable,
+  getLastDisplayedTable,
+  clearLastDisplayedTable,
+  parsePositionReference,
+  getItemByPosition,
 };
