@@ -8,7 +8,7 @@ const TaskSchema = new mongoose.Schema({
   },
   createdAt: { type: Date, default: Date.now },
   completed: { type: Boolean, default: false },
-  dueDate: { type: Date, required: true },
+  dueDate: { type: Date, default: null },
   reminderId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Reminder",

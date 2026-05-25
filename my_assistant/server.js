@@ -98,6 +98,263 @@ const {
   debugDate,
 } = require("./utils/dateFormatter.js");
 
+// Add these helper functions at the top of server.js (after requires)
+
+/**
+ * Generate pie chart URL for task status distribution
+ */
+function generateStatusPieChartUrl(stats) {
+  const { pending, completed, overdue } = stats;
+  const total = pending + completed + overdue;
+
+  if (total === 0) return null;
+
+  // Build data for chart
+  const labels = [];
+  const data = [];
+  const colors = [];
+
+  if (pending > 0) {
+    labels.push("Pending");
+    data.push(pending);
+    colors.push("#FFA726");
+  }
+  if (completed > 0) {
+    labels.push("Completed");
+    data.push(completed);
+    colors.push("#66BB6A");
+  }
+  if (overdue > 0) {
+    labels.push("Overdue");
+    data.push(overdue);
+    colors.push("#EF5350");
+  }
+
+  // Create chart config
+  const chartConfig = {
+    type: "doughnut", // or 'pie'
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          data: data,
+          backgroundColor: colors,
+          borderWidth: 2,
+          borderColor: "#ffffff",
+        },
+      ],
+    },
+    options: {
+      title: {
+        display: true,
+        text: "📊 Task Status Distribution",
+        fontSize: 18,
+        fontColor: "#333",
+      },
+      legend: {
+        position: "bottom",
+        labels: {
+          fontSize: 12,
+          fontColor: "#333",
+        },
+      },
+      plugins: {
+        datalabels: {
+          display: false,
+        },
+      },
+      tooltips: {
+        callbacks: {
+          label: function (tooltipItem, data) {
+            const dataset = data.datasets[tooltipItem.datasetIndex];
+            const total = dataset.data.reduce((a, b) => a + b, 0);
+            const value = dataset.data[tooltipItem.index];
+            const percentage = ((value / total) * 100).toFixed(1);
+            return `${data.labels[tooltipItem.index]}: ${value} (${percentage}%)`;
+          },
+        },
+      },
+    },
+  };
+
+  const encodedConfig = encodeURIComponent(JSON.stringify(chartConfig));
+  return `https://quickchart.io/chart?c=${encodedConfig}&w=300&h=250`;
+}
+
+/**
+ * Generate pie chart URL for priority distribution
+ */
+function generatePriorityPieChartUrl(tasks) {
+  const priorityCounts = {
+    important: 0,
+    high: 0,
+    medium: 0,
+    low: 0,
+  };
+
+  tasks.forEach((task) => {
+    if (priorityCounts[task.priority] !== undefined) {
+      priorityCounts[task.priority]++;
+    }
+  });
+
+  const labels = [];
+  const data = [];
+  const colors = [];
+  const priorityLabels = {
+    important: "🔴 Important",
+    high: "🟠 High",
+    medium: "🟡 Medium",
+    low: "🟢 Low",
+  };
+  const priorityColors = {
+    important: "#7E57C2",
+    high: "#EF5350",
+    medium: "#FFA726",
+    low: "#66BB6A",
+  };
+
+  for (const [priority, count] of Object.entries(priorityCounts)) {
+    if (count > 0) {
+      labels.push(priorityLabels[priority]);
+      data.push(count);
+      colors.push(priorityColors[priority]);
+    }
+  }
+
+  if (data.length === 0) return null;
+
+  const chartConfig = {
+    type: "pie",
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          data: data,
+          backgroundColor: colors,
+          borderWidth: 2,
+          borderColor: "#ffffff",
+        },
+      ],
+    },
+    options: {
+      title: {
+        display: true,
+        text: "📊 Task Priority Distribution (Pending)",
+        fontSize: 18,
+        fontColor: "#333",
+      },
+      legend: {
+        position: "bottom",
+        labels: {
+          fontSize: 12,
+          fontColor: "#333",
+        },
+      },
+      tooltips: {
+        callbacks: {
+          label: function (tooltipItem, data) {
+            const dataset = data.datasets[tooltipItem.datasetIndex];
+            const total = dataset.data.reduce((a, b) => a + b, 0);
+            const value = dataset.data[tooltipItem.index];
+            const percentage = ((value / total) * 100).toFixed(1);
+            return `${data.labels[tooltipItem.index]}: ${value} (${percentage}%)`;
+          },
+        },
+      },
+    },
+  };
+
+  const encodedConfig = encodeURIComponent(JSON.stringify(chartConfig));
+  return `https://quickchart.io/chart?c=${encodedConfig}&w=300&h=250`;
+}
+
+/**
+ * Generate pie chart for reminders distribution
+ */
+function generateReminderPieChartUrl(reminders) {
+  const today = new Date();
+  const todayStart = getISTStartOfDay();
+  const tomorrowStart = getISTStartOfNextDay();
+  const nextWeekStart = new Date(todayStart);
+  nextWeekStart.setDate(todayStart.getDate() + 7);
+
+  let todayCount = 0;
+  let tomorrowCount = 0;
+  let thisWeekCount = 0;
+  let futureCount = 0;
+
+  reminders.forEach((reminder) => {
+    const remindDate = new Date(reminder.remindAt);
+    if (remindDate >= todayStart && remindDate < tomorrowStart) {
+      todayCount++;
+    } else if (remindDate >= tomorrowStart && remindDate < nextWeekStart) {
+      if (remindDate.getDate() === tomorrowStart.getDate()) {
+        tomorrowCount++;
+      } else {
+        thisWeekCount++;
+      }
+    } else if (remindDate >= nextWeekStart) {
+      futureCount++;
+    }
+  });
+
+  const labels = [];
+  const data = [];
+  const colors = [];
+
+  if (todayCount > 0) {
+    labels.push("Today");
+    data.push(todayCount);
+    colors.push("#EF5350");
+  }
+  if (tomorrowCount > 0) {
+    labels.push("Tomorrow");
+    data.push(tomorrowCount);
+    colors.push("#FFA726");
+  }
+  if (thisWeekCount > 0) {
+    labels.push("This Week");
+    data.push(thisWeekCount);
+    colors.push("#66BB6A");
+  }
+  if (futureCount > 0) {
+    labels.push("Future");
+    data.push(futureCount);
+    colors.push("#42A5F5");
+  }
+
+  if (data.length === 0) return null;
+
+  const chartConfig = {
+    type: "doughnut",
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          data: data,
+          backgroundColor: colors,
+          borderWidth: 2,
+          borderColor: "#ffffff",
+        },
+      ],
+    },
+    options: {
+      title: {
+        display: true,
+        text: "⏰ Reminder Distribution",
+        fontSize: 18,
+        fontColor: "#333",
+      },
+      legend: {
+        position: "bottom",
+      },
+    },
+  };
+
+  const encodedConfig = encodeURIComponent(JSON.stringify(chartConfig));
+  return `https://quickchart.io/chart?c=${encodedConfig}&w=300&h=250`;
+}
 /** User / AI said "this task" etc. — resolve via last-mentioned task id */
 function isThisTaskPlaceholder(query) {
   const q = String(query || "")
@@ -112,12 +369,78 @@ function isThisTaskPlaceholder(query) {
   );
 }
 
+// Helper function to capitalize first letter of each word in title
+function capitalizeTitle(title) {
+  if (!title || typeof title !== "string") return "";
+
+  // Split by spaces and capitalize each word
+  return title
+    .split(" ")
+    .map((word) => {
+      if (word.length === 0) return word;
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    })
+    .join(" ");
+}
+
+// Helper function to check for duplicate task
+async function isDuplicateTask(title, excludeId = null) {
+  const capitalizedTitle = capitalizeTitle(title);
+  const query = {
+    title: { $regex: new RegExp(`^${escapeRegex(capitalizedTitle)}$`, "i") },
+  };
+  if (excludeId) {
+    query._id = { $ne: excludeId };
+  }
+  const existing = await Task.findOne(query);
+  return existing ? existing : null;
+}
+
+// Helper function to check for duplicate reminder
+async function isDuplicateReminder(title, excludeId = null) {
+  const capitalizedTitle = capitalizeTitle(title);
+  const query = {
+    title: { $regex: new RegExp(`^${escapeRegex(capitalizedTitle)}$`, "i") },
+  };
+  if (excludeId) {
+    query._id = { $ne: excludeId };
+  }
+  const existing = await Reminder.findOne(query);
+  return existing ? existing : null;
+}
+
+// Helper function to check for duplicate note
+async function isDuplicateNote(title, excludeId = null) {
+  const capitalizedTitle = capitalizeTitle(title);
+  const query = {
+    title: { $regex: new RegExp(`^${escapeRegex(capitalizedTitle)}$`, "i") },
+  };
+  if (excludeId) {
+    query._id = { $ne: excludeId };
+  }
+  const existing = await Note.findOne(query);
+  return existing ? existing : null;
+}
+
 async function findTaskByUpdateSearch(searchQuery) {
-  if (isThisTaskPlaceholder(searchQuery)) {
+  // ✅ Handle task reference
+  if (searchQuery === "THIS_TASK_REFERENCE") {
     const id = getLastMentionedTaskId();
     if (!id) return null;
+    console.log(`📌 Using last mentioned task ID: ${id}`);
     return Task.findById(id);
   }
+
+  // ✅ Handle reminder reference (get task of last mentioned reminder)
+  if (searchQuery === "THIS_REMINDER_REFERENCE") {
+    const reminderId = getLastMentionedReminderId();
+    if (!reminderId) return null;
+    const reminder = await Reminder.findById(reminderId);
+    if (!reminder || !reminder.taskId) return null;
+    console.log(`📌 Getting task from reminder: "${reminder.title}"`);
+    return Task.findById(reminder.taskId);
+  }
+
   const safe = escapeRegex(searchQuery);
   let task = await Task.findOne({
     title: { $regex: new RegExp(`^${safe}$`, "i") },
@@ -131,11 +454,29 @@ async function findTaskByUpdateSearch(searchQuery) {
 }
 
 async function findReminderByUpdateSearch(searchQuery) {
-  if (isThisTaskPlaceholder(searchQuery)) {
-    const id = getLastMentionedTaskId();
-    if (!id) return null;
-    const task = await Task.findById(id);
-    if (!task?.reminderId) return null;
+  if (searchQuery === "THIS_REMINDER_REFERENCE") {
+    const id = getLastMentionedReminderId();
+    if (!id) {
+      console.log(`⚠️ No last mentioned reminder found`);
+      return null;
+    }
+    console.log(`📌 Using last mentioned reminder ID: ${id}`);
+    return Reminder.findById(id);
+  }
+
+  // ✅ Handle task reference (get reminder of last mentioned task)
+  if (searchQuery === "THIS_TASK_REFERENCE") {
+    const taskId = getLastMentionedTaskId();
+    if (!taskId) {
+      console.log(`⚠️ No last mentioned task found`);
+      return null;
+    }
+    const task = await Task.findById(taskId);
+    if (!task || !task.reminderId) {
+      console.log(`⚠️ Task has no reminder`);
+      return null;
+    }
+    console.log(`📌 Getting reminder of task: "${task.title}"`);
     return Reminder.findById(task.reminderId);
   }
   const safe = escapeRegex(searchQuery);
@@ -262,7 +603,6 @@ function formatSingleTaskTable(task, reminder = null, note = null) {
   if (task.dueDate) {
     response += `📅 Due: ${formatISTDate(task.dueDate)}\n`;
   }
-  response += `🆔 ID: ${task._id}\n`;
 
   if (reminder) {
     response += `\n⏰ **Reminder:** "${reminder.title}" at ${formatISTDate(reminder.remindAt)}\n`;
@@ -274,8 +614,6 @@ function formatSingleTaskTable(task, reminder = null, note = null) {
     response += `\n📝 **Note:** "${note.title}"\n`;
     response += `📄 Content: ${content}\n`;
   }
-
-  response += `\n💡 You can now ask: "Show **its reminder**" or "Show **its note**"`;
 
   return response;
 }
@@ -460,6 +798,14 @@ async function updateTaskMultiFields(searchQuery, updates) {
   const updateLog = {};
   let oldTitle = taskToUpdate.title;
 
+  // ✅ IMPORTANT: Store previous values for dependency tracking
+  const previousValues = {
+    oldDueDate: taskToUpdate.dueDate ? new Date(taskToUpdate.dueDate) : null,
+    oldTitle: taskToUpdate.title,
+    oldPriority: taskToUpdate.priority,
+    oldCompleted: taskToUpdate.completed,
+  };
+
   for (const [field, value] of Object.entries(updates)) {
     switch (field) {
       case "dueDate":
@@ -476,6 +822,18 @@ async function updateTaskMultiFields(searchQuery, updates) {
             `❌ Due date: ${dueError || `Failed to parse ${value}`}`,
           );
         } else {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          if (newDueDate < today) {
+            const todayIST = formatISTDate(today);
+            const dueIST = formatISTDate(tempDate);
+            finalReply =
+              `❌ Cannot set due date in the past!\n\n` +
+              `📅 **Attempted due date:** ${dueIST}\n` +
+              `📅 **Today's date:** ${todayIST}\n\n` +
+              `💡 Please provide a due date that is today or in the future.`;
+            break;
+          }
           taskToUpdate.dueDate = newDueDate;
           changes.push(`✅ Due date: ${formatISTDate(newDueDate)}`);
           updateLog.dueDate = true;
@@ -508,33 +866,15 @@ async function updateTaskMultiFields(searchQuery, updates) {
         updateLog.completed = true;
         break;
 
-      case "note":
-        let existingNote = taskToUpdate.noteId
-          ? await Note.findById(taskToUpdate.noteId)
-          : null;
-        if (existingNote) {
-          existingNote.content = value;
-          await existingNote.save();
-          changes.push(`✅ Note content updated`);
-        } else {
-          const newNote = new Note({
-            title: `Note for ${taskToUpdate.title}`,
-            content: value,
-            taskId: taskToUpdate._id,
-          });
-          await newNote.save();
-          taskToUpdate.noteId = newNote._id;
-          changes.push(`✅ New note created with content`);
-        }
-        break;
-
       default:
         changes.push(`❌ Unknown field: ${field}`);
     }
   }
 
   await taskToUpdate.save();
-  await updateDependencies(taskToUpdate, updateLog);
+
+  // ✅ Pass previousValues to track what changed
+  await updateDependencies(taskToUpdate, updateLog, previousValues);
 
   return {
     success: true,
@@ -582,8 +922,6 @@ function formatSingleNoteTable(noteData) {
     table += `\n⏰ **Reminder for this task:** ${reminder.title} at ${formatISTDate(reminder.remindAt)}\n`;
   }
 
-  table += `\n💡 You can now ask: "Show **its task**" or "Show **its reminder**"`;
-
   return table;
 }
 
@@ -615,7 +953,6 @@ function formatSingleReminderTable(reminderData) {
   // Format the response
   let response = `⏰ **Reminder: "${reminder.title}"**\n`;
   response += `📅 Time: ${formatISTDate(reminder.remindAt)}\n`;
-  response += `🆔 ID: ${reminder._id}\n`;
 
   if (task) {
     response += `\n📋 **Linked Task:** "${task.title}"\n`;
@@ -629,8 +966,6 @@ function formatSingleReminderTable(reminderData) {
     response += `\n📝 **Linked Note:** "${note.title}"\n`;
   }
 
-  response += `\n💡 You can now ask: "Show **its task**" or "Show **its note**"`;
-
   return response;
 }
 function formatSingleNoteTable(noteData) {
@@ -643,7 +978,6 @@ function formatSingleNoteTable(noteData) {
   const reminder = noteData.linkedReminder;
 
   let response = `📝 **Note: "${note.title}"**\n`;
-  response += `🆔 ID: ${note._id}\n`;
 
   let content = note.content ? note.content : "Empty";
   content = content.replace(/\n/g, " ");
@@ -661,8 +995,6 @@ function formatSingleNoteTable(noteData) {
   if (reminder) {
     response += `\n⏰ **Reminder:** "${reminder.title}" at ${formatISTDate(reminder.remindAt)}\n`;
   }
-
-  response += `\n💡 You can now ask: "Show **its task**" or "Get **task of this note**"`;
 
   return response;
 }
@@ -732,9 +1064,7 @@ function formatTaskListWithDetailsTable(tasks, action) {
   if (action?.special === "weekend") title = "Weekend Tasks";
   if (action?.special === "has-reminder") title = "Tasks with Reminders";
 
-  let footer = `\n💡 You can now ask: "Give details of **first one**" or "What about **second task**" or "Show me **the last one**"`;
-
-  return `📋 **${title}** (${tasks.length} found):\n\n${table}${footer}`;
+  return `📋 **${title}** (${tasks.length} found):\n\n${table}`;
 }
 
 // Update formatRemindersAsTable function
@@ -758,9 +1088,7 @@ function formatRemindersAsTable(reminders) {
     table += `| ${i + 1} | ${title} | ${time} | ${linkedTask} |\n`;
   }
 
-  let footer = `\n💡 You can now ask: "Give details of **first one**" or "What about **second reminder**" or "Show me **the last one**"`;
-
-  return `Found ${reminders.length} reminder(s):\n\n${table}${footer}`;
+  return `Found ${reminders.length} reminder(s):\n\n${table}`;
 }
 
 // Update formatNotesAsTable function
@@ -784,9 +1112,7 @@ function formatNotesAsTable(notes) {
     table += `| ${i + 1} | ${note.title} | ${preview} | ${linkedTask} | ${created} |\n`;
   }
 
-  let footer = `\n💡 You can now ask: "Give details of **first one**" or "What about **second note**" or "Show me **the last one**"`;
-
-  return `Found ${notes.length} note(s):\n\n${table}${footer}`;
+  return `Found ${notes.length} note(s):\n\n${table}`;
 }
 
 // Update formatRecentTasksTable function
@@ -807,9 +1133,7 @@ function formatRecentTasksTable(tasks) {
     table += `| ${i + 1} | ${task.title} | ${task.priority} | ${dueDate} | ${status} | ${created} |\n`;
   }
 
-  let footer = `\n💡 You can now ask: "Give details of **first one**" or "What about **second task**"`;
-
-  return `📋 **Recently Created Tasks** (Last ${tasks.length}):\n\n${table}${footer}`;
+  return `📋 **Recently Created Tasks** (Last ${tasks.length}):\n\n${table}`;
 }
 
 function formatRecentRemindersTable(reminders) {
@@ -1137,6 +1461,25 @@ app.post("/api/chat", async (req, res) => {
           console.log(`   Priority: "${action.priority}"`);
           console.log(`   Due Date String: "${action.dueDate}"`);
 
+          // ✅ Capitalize the title
+          const capitalizedTaskTitle = capitalizeTitle(action.title);
+          console.log(`   Capitalized title: "${capitalizedTaskTitle}"`);
+
+          // ✅ Check for duplicate task
+          const existingTask = await isDuplicateTask(capitalizedTaskTitle);
+          if (existingTask) {
+            finalReply =
+              `⚠️ Task "${capitalizedTaskTitle}" already exists!\n\n` +
+              `📋 Existing task details:\n` +
+              `| Field | Value |\n|-------|-------|\n` +
+              `| **Title** | ${existingTask.title} |\n` +
+              `| **Priority** | ${existingTask.priority} |\n` +
+              `| **Status** | ${existingTask.completed ? "Completed" : "Pending"} |\n` +
+              `| **Due Date** | ${existingTask.dueDate ? formatISTDate(existingTask.dueDate) : "No due date"} |\n\n` +
+              `💡 Use "update task ${existingTask.title}" to modify it instead.`;
+            break;
+          }
+
           let dueDate = null;
           let originalDueDateString = action.dueDate || "";
           let hasExplicitTime = false;
@@ -1147,6 +1490,20 @@ app.post("/api/chat", async (req, res) => {
             action.dueDate !== "undefined"
           ) {
             dueDate = await parseDate(action.dueDate);
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            if (dueDate < today) {
+              console.log("Oh no! The due is past");
+              const todayIST = formatISTDate(today);
+              const dueIST = formatISTDate(dueDate);
+              finalReply =
+                `❌ Cannot create task with due date in the past!\n\n` +
+                `📅 **Provided due date:** ${dueIST}\n` +
+                `📅 **Today's date:** ${todayIST}\n\n` +
+                `💡 Please provide a due date that is today or in the future.\n` +
+                `   Examples: "tomorrow", "next Friday", "May 30", "today 5pm"`;
+              break;
+            }
             console.log(`   Parsed due date: ${dueDate}`);
             console.log(
               `   Parsed due date UTC: ${dueDate ? dueDate.toISOString() : "null"}`,
@@ -1160,7 +1517,7 @@ app.post("/api/chat", async (req, res) => {
           }
 
           const task = new Task({
-            title: action.title,
+            title: capitalizedTaskTitle, // ✅ Use capitalized title
             priority: ["low", "medium", "high", "important"].includes(
               action.priority,
             )
@@ -1186,7 +1543,7 @@ app.post("/api/chat", async (req, res) => {
             `📌 Last mentioned task set to: "${savedTask.title}" (ID: ${savedTask._id})`,
           );
 
-          let successMessage = `✅ Task "${action.title}" has been created with ${action.priority || "medium"} priority!\n\n`;
+          let successMessage = `✅ Task "${savedTask.title}" has been created with ${action.priority || "medium"} priority!\n\n`;
 
           if (autoReminder && originalDueDateString) {
             successMessage += `⏰ Reminder set for: ${originalDueDateString}\n`;
@@ -1273,7 +1630,6 @@ app.post("/api/chat", async (req, res) => {
 
               finalReply = formatSingleTaskTable(item, reminder, note);
               finalReply += `\n\n📍 **[Task ${itemIndex} of ${tableData.count}]** from your list.`;
-              finalReply += `\n\n💡 You can now ask:\n   • "Show **its reminder**"\n   • "Show **its note**"\n   • "Update **this task**"`;
               break;
 
             case "reminders":
@@ -1318,11 +1674,7 @@ app.post("/api/chat", async (req, res) => {
                 linkedTask: linkedTask,
               });
               finalReply += `\n\n📍 **[Reminder ${itemIndex} of ${tableData.count}]** from your list.`;
-              if (linkedTask) {
-                finalReply += `\n\n💡 You can now ask:\n   • "Show **its task**"\n   • "Show **its note**"\n   • "Update **this reminder**"`;
-              } else {
-                finalReply += `\n\n💡 You can now ask:\n   • "Update **this reminder**"\n   • "Delete **this reminder**"`;
-              }
+
               break;
 
             case "notes":
@@ -1368,29 +1720,13 @@ app.post("/api/chat", async (req, res) => {
                 note: item,
                 linkedTask: linkedTaskForNote,
               });
-              finalReply += `\n\n📍 **[Note ${itemIndex} of ${tableData.count}]** from your list.`;
-              if (linkedTaskForNote) {
-                finalReply += `\n\n💡 You can now ask:\n   • "Show **its task**"\n   • "Show **its reminder**"\n   • "Get **content of this note**"`;
-              } else {
-                finalReply += `\n\n💡 You can now ask:\n   • "Get **content of this note**"\n   • "Update **this note**"`;
-              }
+
               break;
 
             default:
               finalReply = `📋 Found: "${item.title}" (${itemType}) - Position #${itemIndex}`;
           }
 
-          // Add navigation hints
-          if (positionResult.hasPrevious || positionResult.hasNext) {
-            finalReply += `\n\n📋 **Navigation:**`;
-            if (positionResult.hasPrevious) {
-              finalReply += `\n   • "show previous" or "go to item ${itemIndex - 1}"`;
-            }
-            if (positionResult.hasNext) {
-              finalReply += `\n   • "show next" or "go to item ${itemIndex + 1}"`;
-            }
-            finalReply += `\n   • "list all" to see the full table again`;
-          }
           break;
 
         case "GET_NOTE_CONTENT":
@@ -1409,6 +1745,205 @@ app.post("/api/chat", async (req, res) => {
             finalReply = `📝 Note "${action.searchQuery}" not found.`;
           } else {
             finalReply = formatNoteContent(noteContentData);
+          }
+          break;
+
+        case "COUNT_ENTITY":
+          console.log(
+            `🔢 Counting ${action.entity} with filters: "${action.filters}"`,
+          );
+
+          let count = 0;
+          let filterDescription = "";
+          let countResult = null;
+
+          try {
+            // Parse filters (split by |)
+            const filters = (action.filters || "all")
+              .split("|")
+              .map((f) => f.toLowerCase().trim());
+
+            switch (action.entity) {
+              case "tasks":
+                let taskQuery = {};
+                filterDescription = "";
+
+                for (const filter of filters) {
+                  switch (filter) {
+                    case "pending":
+                      taskQuery.completed = false;
+                      filterDescription = "pending ";
+                      break;
+                    case "completed":
+                      taskQuery.completed = true;
+                      filterDescription = "completed ";
+                      break;
+                    case "overdue":
+                      const todayStart = getISTStartOfDay();
+                      taskQuery.dueDate = { $lt: todayStart };
+                      taskQuery.completed = false;
+                      filterDescription = "overdue ";
+                      break;
+                    case "today":
+                      const { start, end } = getISTDayRange();
+                      taskQuery.dueDate = { $gte: start, $lt: end };
+                      filterDescription = "due today ";
+                      break;
+                    case "tomorrow":
+                      const tomorrowStart = getISTStartOfNextDay();
+                      const dayAfter = new Date(
+                        tomorrowStart.getTime() + 24 * 60 * 60 * 1000,
+                      );
+                      taskQuery.dueDate = {
+                        $gte: tomorrowStart,
+                        $lt: dayAfter,
+                      };
+                      filterDescription = "due tomorrow ";
+                      break;
+                    case "this-week":
+                      const { start: weekStart } = getISTDayRange();
+                      const endOfWeek = new Date(weekStart);
+                      const istWeekday = getISTWeekday();
+                      endOfWeek.setTime(
+                        weekStart.getTime() +
+                          (7 - istWeekday) * 24 * 60 * 60 * 1000,
+                      );
+                      taskQuery.dueDate = { $gte: weekStart, $lte: endOfWeek };
+                      filterDescription = "due this week ";
+                      break;
+                    case "high":
+                      taskQuery.priority = "high";
+                      filterDescription += "high priority ";
+                      break;
+                    case "medium":
+                      taskQuery.priority = "medium";
+                      filterDescription += "medium priority ";
+                      break;
+                    case "low":
+                      taskQuery.priority = "low";
+                      filterDescription += "low priority ";
+                      break;
+                    case "important":
+                      taskQuery.priority = "important";
+                      filterDescription += "important ";
+                      break;
+                    case "has-reminder":
+                      taskQuery.reminderId = { $ne: null };
+                      filterDescription += "with reminders ";
+                      break;
+                    case "has-note":
+                      taskQuery.noteId = { $ne: null };
+                      filterDescription += "with notes ";
+                      break;
+                    case "no-reminder":
+                      taskQuery.reminderId = null;
+                      filterDescription += "without reminders ";
+                      break;
+                    case "all":
+                    default:
+                      // No filter
+                      break;
+                  }
+                }
+
+                count = await Task.countDocuments(taskQuery);
+                countResult = {
+                  entity: "tasks",
+                  count,
+                  filters: filterDescription || "total",
+                };
+                break;
+
+              case "reminders":
+                let reminderQuery = {};
+                filterDescription = "";
+
+                for (const filter of filters) {
+                  switch (filter) {
+                    case "today":
+                      const { start, end } = getISTDayRange();
+                      reminderQuery.remindAt = { $gte: start, $lt: end };
+                      filterDescription = "for today ";
+                      break;
+                    case "tomorrow":
+                      const tomorrowStart = getISTStartOfNextDay();
+                      const dayAfter = new Date(
+                        tomorrowStart.getTime() + 24 * 60 * 60 * 1000,
+                      );
+                      reminderQuery.remindAt = {
+                        $gte: tomorrowStart,
+                        $lt: dayAfter,
+                      };
+                      filterDescription = "for tomorrow ";
+                      break;
+                    case "upcoming":
+                      const now = new Date();
+                      reminderQuery.remindAt = { $gte: now };
+                      filterDescription = "upcoming ";
+                      break;
+                    case "all":
+                    default:
+                      break;
+                  }
+                }
+
+                count = await Reminder.countDocuments(reminderQuery);
+                countResult = {
+                  entity: "reminders",
+                  count,
+                  filters: filterDescription || "total",
+                };
+                break;
+
+              case "notes":
+                let noteQuery = {};
+                filterDescription = "";
+
+                for (const filter of filters) {
+                  switch (filter) {
+                    case "linked":
+                      noteQuery.taskId = { $ne: null };
+                      filterDescription = "linked to tasks ";
+                      break;
+                    case "standalone":
+                      noteQuery.taskId = null;
+                      filterDescription = "standalone ";
+                      break;
+                    case "with-content":
+                      noteQuery.content = { $ne: "", $exists: true };
+                      filterDescription = "with content ";
+                      break;
+                    case "all":
+                    default:
+                      break;
+                  }
+                }
+
+                count = await Note.countDocuments(noteQuery);
+                countResult = {
+                  entity: "notes",
+                  count,
+                  filters: filterDescription || "total",
+                };
+                break;
+
+              default:
+                finalReply = `❌ I can only count tasks, reminders, or notes.`;
+                break;
+            }
+
+            if (countResult) {
+              // Format the response as a clean table
+              finalReply = `| Metric | Count |\n|--------|-------|\n| **${countResult.entity.charAt(0).toUpperCase() + countResult.entity.slice(1)}** ${countResult.filters} | **${countResult.count}** |`;
+
+              // Add a helpful note if count is zero
+              if (countResult.count === 0) {
+                finalReply += `\n\n📌 No ${countResult.entity} found ${countResult.filters ? `with ${countResult.filters}` : ""}.`;
+              }
+            }
+          } catch (error) {
+            console.error("Error counting entities:", error);
+            finalReply = `❌ Sorry, I couldn't count the ${action.entity}. Please try again.`;
           }
           break;
 
@@ -1534,9 +2069,22 @@ app.post("/api/chat", async (req, res) => {
                 const oldTitle = noteToUpdateMulti.title;
                 noteToUpdateMulti.title = value;
                 noteChanges.push(`✅ Title: "${oldTitle}" → "${value}"`);
-              } else if (field === "content") {
-                noteToUpdateMulti.content = value;
-                noteChanges.push(`✅ Content updated`);
+              }
+              if (field === "content") {
+                // Append new content to existing content
+                const existingContent = noteToUpdateMulti.content || "";
+                const newContent = value;
+
+                // Add a separator if existing content is not empty
+                if (existingContent && existingContent.trim()) {
+                  noteToUpdateMulti.content = `${existingContent}\n\n${newContent}`;
+                  noteChanges.push(
+                    `✅ Content appended (existing content preserved)`,
+                  );
+                } else {
+                  noteToUpdateMulti.content = newContent;
+                  noteChanges.push(`✅ Content added`);
+                }
               }
             }
 
@@ -1566,6 +2114,126 @@ app.post("/api/chat", async (req, res) => {
           console.log(
             `📋 Listing tasks with status: "${action.status}", special: "${action.special}"`,
           );
+
+          console.log(`📋 LIST_TASKS received:`, {
+            status: action.status,
+            special: action.special,
+            dateRangeType: action.dateRangeType,
+            dateFrom: action.dateFrom,
+            dateTo: action.dateTo,
+            specificDate: action.specificDate,
+          });
+
+          // ============================================
+          // HANDLE DATE RANGE (from the AI)
+          // ============================================
+          if (
+            action.dateRangeType === "date-range" &&
+            action.dateFrom &&
+            action.dateTo
+          ) {
+            console.log(
+              `📅 Processing date range from AI: ${action.dateFrom} to ${action.dateTo}`,
+            );
+
+            const fromDate = await parseDate(action.dateFrom);
+            const toDate = await parseDate(action.dateTo);
+
+            if (fromDate && toDate) {
+              const startDate = new Date(fromDate);
+              startDate.setHours(0, 0, 0, 0);
+              const endDate = new Date(toDate);
+              endDate.setHours(23, 59, 59, 999);
+
+              let query = {
+                dueDate: { $gte: startDate, $lte: endDate },
+              };
+
+              if (action.status === "pending") query.completed = false;
+              else if (action.status === "completed") query.completed = true;
+
+              console.log(
+                `📅 Date range query:`,
+                JSON.stringify(query, null, 2),
+              );
+
+              let tasks = await Task.find(query).sort({ dueDate: 1 }).limit(50);
+
+              const tasksWithDeps = await Promise.all(
+                tasks.map(async (task) => {
+                  const reminder = task.reminderId
+                    ? await Reminder.findById(task.reminderId)
+                    : null;
+                  const note = task.noteId
+                    ? await Note.findById(task.noteId)
+                    : null;
+                  return { ...task.toObject(), reminder, note };
+                }),
+              );
+
+              if (tasksWithDeps.length === 0) {
+                finalReply = `📋 No tasks found between ${action.dateFrom} and ${action.dateTo}.`;
+              } else {
+                finalReply = formatTaskListWithDetailsTable(tasksWithDeps, {
+                  status: "date-range",
+                  special: `${action.dateFrom} to ${action.dateTo}`,
+                });
+              }
+              break;
+            } else {
+              finalReply = `❌ Could not parse dates: "${action.dateFrom}" to "${action.dateTo}".`;
+              break;
+            }
+          }
+
+          // ============================================
+          // HANDLE SPECIFIC DATE
+          // ============================================
+          if (action.dateRangeType === "specific-date" && action.specificDate) {
+            console.log(
+              `📅 Processing specific date from AI: ${action.specificDate}`,
+            );
+
+            const targetDate = await parseDate(action.specificDate);
+
+            if (targetDate) {
+              const startDate = new Date(targetDate);
+              startDate.setHours(0, 0, 0, 0);
+              const endDate = new Date(targetDate);
+              endDate.setHours(23, 59, 59, 999);
+
+              let query = {
+                dueDate: { $gte: startDate, $lte: endDate },
+              };
+
+              if (action.status === "pending") query.completed = false;
+              else if (action.status === "completed") query.completed = true;
+
+              let tasks = await Task.find(query).sort({ dueDate: 1 }).limit(50);
+
+              const tasksWithDeps = await Promise.all(
+                tasks.map(async (task) => {
+                  const reminder = task.reminderId
+                    ? await Reminder.findById(task.reminderId)
+                    : null;
+                  const note = task.noteId
+                    ? await Note.findById(task.noteId)
+                    : null;
+                  return { ...task.toObject(), reminder, note };
+                }),
+              );
+
+              if (tasksWithDeps.length === 0) {
+                finalReply = `📋 No tasks found due on ${action.specificDate}.`;
+              } else {
+                finalReply = formatTaskListWithDetailsTable(tasksWithDeps, {
+                  status: "specific-date",
+                  special: action.specificDate,
+                });
+              }
+              break;
+            }
+          }
 
           // Clean the status and special values
           let cleanStatus = action.status;
@@ -1616,7 +2284,7 @@ app.post("/api/chat", async (req, res) => {
               filters.dueDate = "overdue";
               filters.status = "pending";
               break;
-            case "today": // ✅ ADD THIS - for "show me my day"
+            case "today":
               filters.dueDate = "today";
               filters.status = "pending";
               break;
@@ -1632,6 +2300,65 @@ app.post("/api/chat", async (req, res) => {
               filters.dueDate = "this-week";
               filters.status = "pending";
               break;
+
+            // ============================================
+            // NEW CASES FOR DATE RANGES
+            // ============================================
+
+            case "upcoming":
+              // Tasks due in the future (from today onwards)
+              filters.dueDate = "upcoming";
+              filters.status = "pending";
+              break;
+
+            case "next-3-days":
+              // Tasks due in next 3 days
+              filters.dueDate = "next-3-days";
+              filters.status = "pending";
+              break;
+
+            case "next-5-days":
+              // Tasks due in next 5 days
+              filters.dueDate = "next-5-days";
+              filters.status = "pending";
+              break;
+
+            case "next-7-days":
+              // Tasks due in next 7 days (next week)
+              filters.dueDate = "next-7-days";
+              filters.status = "pending";
+              break;
+
+            case "next-14-days":
+              // Tasks due in next 14 days (2 weeks)
+              filters.dueDate = "next-14-days";
+              filters.status = "pending";
+              break;
+
+            case "next-30-days":
+              // Tasks due in next 30 days (this month)
+              filters.dueDate = "next-30-days";
+              filters.status = "pending";
+              break;
+
+            case "this-month":
+              // Tasks due in current month
+              filters.dueDate = "this-month";
+              filters.status = "pending";
+              break;
+
+            case "next-month":
+              // Tasks due in next month
+              filters.dueDate = "next-month";
+              filters.status = "pending";
+              break;
+
+            case "completed-last-7-days":
+              // Tasks completed in last 7 days
+              filters.dueDate = "completed-last-7-days";
+              filters.status = "completed";
+              break;
+
             default:
               if (!cleanSpecial) {
                 filters.status = "pending";
@@ -1642,43 +2369,36 @@ app.post("/api/chat", async (req, res) => {
           if (action.special) {
             switch (action.special) {
               case "weekend":
-                // Weekend = Saturday and Sunday
-                // For simplicity, show tasks due in next 2-3 days
-                const today = new Date();
-                const currentDay = today.getDay(); // 0=Sunday, 1=Monday...
-                let daysUntilSaturday = 6 - currentDay; // Saturday is 6
-                if (daysUntilSaturday < 0) daysUntilSaturday += 7;
                 filters.dueDate = "weekend";
                 break;
-
               case "has-reminder":
-                // Tasks that have a reminder
                 filters.hasReminder = true;
                 break;
-
               case "has-note":
                 filters.hasNote = true;
                 break;
-
               case "today":
                 filters.dueDate = "today";
                 break;
-
               case "tomorrow":
                 filters.dueDate = "tomorrow";
                 break;
-
               case "day-after-tomorrow":
                 filters.dueDate = "day after tomorrow";
                 break;
-
               case "this-week":
                 filters.dueDate = "this-week";
+                break;
+              case "upcoming":
+                filters.dueDate = "upcoming";
                 break;
             }
           }
 
-          // Build query based on filters
+          // ============================================
+          // BUILD QUERY BASED ON FILTERS
+          // ============================================
+
           let query = {};
 
           // Status filter
@@ -1693,9 +2413,14 @@ app.post("/api/chat", async (req, res) => {
             query.priority = filters.priority;
           }
 
-          // Due date filter
+          // ============================================
+          // DATE RANGE FILTERS
+          // ============================================
+
+          const now = new Date();
+          const todayStart = getISTStartOfDay();
+
           if (filters.dueDate === "overdue") {
-            const todayStart = getISTStartOfDay();
             query.dueDate = { $lt: todayStart };
             query.completed = false;
           } else if (filters.dueDate === "today") {
@@ -1708,17 +2433,11 @@ app.post("/api/chat", async (req, res) => {
             );
             query.dueDate = { $gte: tomorrowStart, $lt: dayAfter };
           } else if (filters.dueDate === "day after tomorrow") {
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            const dayAfterTomorrow = new Date(today);
-            dayAfterTomorrow.setDate(today.getDate() + 2);
+            const dayAfterTomorrow = new Date(todayStart);
+            dayAfterTomorrow.setDate(todayStart.getDate() + 2);
             const nextDay = new Date(dayAfterTomorrow);
             nextDay.setDate(dayAfterTomorrow.getDate() + 1);
-            const startUTC = new Date(
-              dayAfterTomorrow.getTime() - 5.5 * 60 * 60 * 1000,
-            );
-            const endUTC = new Date(nextDay.getTime() - 5.5 * 60 * 60 * 1000);
-            query.dueDate = { $gte: startUTC, $lt: endUTC };
+            query.dueDate = { $gte: dayAfterTomorrow, $lt: nextDay };
           } else if (filters.dueDate === "this-week") {
             const { start } = getISTDayRange();
             const endOfWeek = new Date(start);
@@ -1727,28 +2446,92 @@ app.post("/api/chat", async (req, res) => {
               start.getTime() + (7 - istWeekday) * 24 * 60 * 60 * 1000,
             );
             query.dueDate = { $gte: start, $lte: endOfWeek };
+          } else if (filters.dueDate === "upcoming") {
+            // Tasks due from today onwards (not overdue)
+            query.dueDate = { $gte: todayStart };
+            query.completed = false;
+          } else if (filters.dueDate === "next-3-days") {
+            const endDate = new Date(todayStart);
+            endDate.setDate(todayStart.getDate() + 3);
+            query.dueDate = { $gte: todayStart, $lte: endDate };
+            query.completed = false;
+          } else if (filters.dueDate === "next-5-days") {
+            const endDate = new Date(todayStart);
+            endDate.setDate(todayStart.getDate() + 5);
+            query.dueDate = { $gte: todayStart, $lte: endDate };
+            query.completed = false;
+          } else if (filters.dueDate === "next-7-days") {
+            const endDate = new Date(todayStart);
+            endDate.setDate(todayStart.getDate() + 7);
+            query.dueDate = { $gte: todayStart, $lte: endDate };
+            query.completed = false;
+          } else if (filters.dueDate === "next-14-days") {
+            const endDate = new Date(todayStart);
+            endDate.setDate(todayStart.getDate() + 14);
+            query.dueDate = { $gte: todayStart, $lte: endDate };
+            query.completed = false;
+          } else if (filters.dueDate === "next-30-days") {
+            const endDate = new Date(todayStart);
+            endDate.setDate(todayStart.getDate() + 30);
+            query.dueDate = { $gte: todayStart, $lte: endDate };
+            query.completed = false;
+          } else if (filters.dueDate === "this-month") {
+            const startOfMonth = new Date(todayStart);
+            startOfMonth.setDate(1);
+            const endOfMonth = new Date(todayStart);
+            endOfMonth.setMonth(todayStart.getMonth() + 1);
+            endOfMonth.setDate(0);
+            endOfMonth.setHours(23, 59, 59, 999);
+            query.dueDate = { $gte: startOfMonth, $lte: endOfMonth };
+          } else if (filters.dueDate === "next-month") {
+            const startOfNextMonth = new Date(todayStart);
+            startOfNextMonth.setMonth(todayStart.getMonth() + 1);
+            startOfNextMonth.setDate(1);
+            const endOfNextMonth = new Date(startOfNextMonth);
+            endOfNextMonth.setMonth(startOfNextMonth.getMonth() + 1);
+            endOfNextMonth.setDate(0);
+            endOfNextMonth.setHours(23, 59, 59, 999);
+            query.dueDate = { $gte: startOfNextMonth, $lte: endOfNextMonth };
           } else if (filters.dueDate === "weekend") {
             // Weekend = upcoming Saturday and Sunday
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            const currentDay = today.getDay();
+            const currentDay = todayStart.getDay();
             let daysUntilSaturday = 6 - currentDay;
             if (daysUntilSaturday < 0) daysUntilSaturday += 7;
-            const saturday = new Date(today);
-            saturday.setDate(today.getDate() + daysUntilSaturday);
+            const saturday = new Date(todayStart);
+            saturday.setDate(todayStart.getDate() + daysUntilSaturday);
             const sunday = new Date(saturday);
             sunday.setDate(saturday.getDate() + 1);
             const sundayEnd = new Date(sunday);
             sundayEnd.setHours(23, 59, 59, 999);
-            const startUTC = new Date(
-              saturday.getTime() - 5.5 * 60 * 60 * 1000,
-            );
-            const endUTC = new Date(sundayEnd.getTime() - 5.5 * 60 * 60 * 1000);
-            query.dueDate = { $gte: startUTC, $lte: endUTC };
+            query.dueDate = { $gte: saturday, $lte: sundayEnd };
+          } else if (filters.dueDate === "completed-last-7-days") {
+            const sevenDaysAgo = new Date(todayStart);
+            sevenDaysAgo.setDate(todayStart.getDate() - 7);
+            query.completed = true;
+            query.updatedAt = { $gte: sevenDaysAgo, $lte: todayStart };
           }
-          // Add this inside the LIST_TASKS case, in the due date filter section
 
-          // NEXT X DAYS filter (NEW)
+          // Handle custom date (if passed as special parameter)
+          if (action.specificDate) {
+            const specificDate = await parseDate(action.specificDate);
+            if (specificDate) {
+              const startOfDay = new Date(specificDate);
+              startOfDay.setHours(0, 0, 0, 0);
+              const endOfDay = new Date(startOfDay);
+              endOfDay.setDate(startOfDay.getDate() + 1);
+              query.dueDate = { $gte: startOfDay, $lt: endOfDay };
+              query.completed = false;
+            }
+          }
+
+          // Handle date range (from - to)
+          if (action.dateFrom && action.dateTo) {
+            const fromDate = await parseDate(action.dateFrom);
+            const toDate = await parseDate(action.dateTo);
+            if (fromDate && toDate) {
+              query.dueDate = { $gte: fromDate, $lte: toDate };
+            }
+          }
 
           // Has reminder filter
           if (filters.hasReminder) {
@@ -1873,6 +2656,22 @@ app.post("/api/chat", async (req, res) => {
                 finalReply = `❌ ${dueError || `Failed to parse: ${action.newValue}`}`;
                 break;
               }
+              const today = new Date();
+              today.setHours(0, 0, 0, 0);
+
+              const newDueDateStart = new Date(newDueDate);
+              newDueDateStart.setHours(0, 0, 0, 0);
+
+              if (newDueDateStart < today) {
+                const todayIST = formatISTDate(today);
+                const dueIST = formatISTDate(newDueDate);
+                finalReply =
+                  `❌ Cannot set due date in the past!\n\n` +
+                  `📅 **Attempted due date:** ${dueIST}\n` +
+                  `📅 **Today's date:** ${todayIST}\n\n` +
+                  `💡 Please provide a due date that is today or in the future.`;
+                break;
+              }
 
               console.log(
                 `  📅 Task schedule update (${mode}): ${formatISTDate(newDueDate)}`,
@@ -1920,7 +2719,20 @@ app.post("/api/chat", async (req, res) => {
             // UPDATE TITLE
             // =========================================
             case "title":
-              taskToUpdate.title = action.newValue;
+              // ✅ Capitalize the new title
+              const capitalizedNewTitle = capitalizeTitle(action.newValue);
+
+              // ✅ Check for duplicate with new title
+              const existingWithNewTitle = await isDuplicateTask(
+                capitalizedNewTitle,
+                taskToUpdate._id,
+              );
+              if (existingWithNewTitle) {
+                finalReply = `⚠️ A task with title "${capitalizedNewTitle}" already exists. Cannot rename to a duplicate title.`;
+                break;
+              }
+
+              taskToUpdate.title = capitalizedNewTitle;
 
               updates.title = true;
 
@@ -2176,24 +2988,47 @@ app.post("/api/chat", async (req, res) => {
             `🗑️ DELETE_TASK action received: "${action.searchQuery}"`,
           );
 
-          let taskSearchTitle = action.searchQuery
-            .split("\n")[0]
-            .replace(/["']/g, "")
-            .trim();
-          console.log(`🔍 Searching for task to delete: "${taskSearchTitle}"`);
+          // ✅ RESOLVE THE REFERENCE FIRST
+          let taskToDelete = null;
 
-          let taskToDelete = await Task.findOne({
-            title: { $regex: new RegExp(`^${taskSearchTitle}$`, "i") },
-          });
+          if (action.searchQuery === "THIS_TASK_REFERENCE") {
+            const lastTaskId = getLastMentionedTaskId();
+            if (lastTaskId) {
+              taskToDelete = await Task.findById(lastTaskId);
+              console.log(
+                `📌 Using last mentioned task: "${taskToDelete?.title}"`,
+              );
+            } else {
+              finalReply = `❌ No task is currently selected. Please view a task first by saying "show task [name]" or list tasks and pick one.`;
+              break;
+            }
+          } else {
+            // Normal search by title
+            let taskSearchTitle = action.searchQuery
+              .split("\n")[0]
+              .replace(/["']/g, "")
+              .trim();
+            console.log(
+              `🔍 Searching for task to delete: "${taskSearchTitle}"`,
+            );
 
-          if (!taskToDelete) {
             taskToDelete = await Task.findOne({
-              title: { $regex: new RegExp(taskSearchTitle, "i") },
+              title: {
+                $regex: new RegExp(`^${escapeRegex(taskSearchTitle)}$`, "i"),
+              },
             });
+
+            if (!taskToDelete) {
+              taskToDelete = await Task.findOne({
+                title: {
+                  $regex: new RegExp(escapeRegex(taskSearchTitle), "i"),
+                },
+              });
+            }
           }
 
           if (!taskToDelete) {
-            finalReply = `❌ Could not find a task titled "${taskSearchTitle}".`;
+            finalReply = `❌ Could not find a task to delete.`;
             break;
           }
 
@@ -2201,9 +3036,14 @@ app.post("/api/chat", async (req, res) => {
             `🗑️ Deleting task: "${taskToDelete.title}" (ID: ${taskToDelete._id})`,
           );
 
-          // This already deletes both reminder and note
+          // Delete dependencies and task
           await deleteDependencies(taskToDelete._id);
           await Task.findByIdAndDelete(taskToDelete._id);
+
+          // ✅ Clear references after deletion
+          clearLastMentioned("task");
+          clearLastMentioned("reminder");
+          clearLastMentioned("note");
 
           finalReply = `✅ Task "${taskToDelete.title}" and its associated reminder & note have been permanently deleted!`;
           createdItem = null;
@@ -2213,32 +3053,64 @@ app.post("/api/chat", async (req, res) => {
         case "DELETE_REMINDER":
           console.log(`⏰ Deleting reminder: "${action.searchQuery}"`);
 
-          let reminderSearchTitle = action.searchQuery
-            .split("\n")[0]
-            .replace(/["']/g, "")
-            .trim();
-          console.log(
-            `🔍 Searching for reminder to delete: "${reminderSearchTitle}"`,
-          );
+          let reminderToDelete = null;
 
-          let reminderToDelete = await Reminder.findOne({
-            title: { $regex: new RegExp(`^${reminderSearchTitle}$`, "i") },
-          });
+          // ✅ RESOLVE THE REFERENCE
+          if (action.searchQuery === "THIS_TASK_REFERENCE") {
+            const lastTaskId = getLastMentionedTaskId();
+            if (lastTaskId) {
+              const task = await Task.findById(lastTaskId);
+              if (task && task.reminderId) {
+                reminderToDelete = await Reminder.findById(task.reminderId);
+                console.log(
+                  `📌 Using reminder from last mentioned task: "${reminderToDelete?.title}"`,
+                );
+              }
+            }
+          } else if (action.searchQuery === "THIS_REMINDER_REFERENCE") {
+            const lastReminderId = getLastMentionedReminderId();
+            if (lastReminderId) {
+              reminderToDelete = await Reminder.findById(lastReminderId);
+              console.log(
+                `📌 Using last mentioned reminder: "${reminderToDelete?.title}"`,
+              );
+            }
+          } else {
+            // Normal search by title
+            let reminderSearchTitle = action.searchQuery
+              .split("\n")[0]
+              .replace(/["']/g, "")
+              .trim();
+            console.log(
+              `🔍 Searching for reminder to delete: "${reminderSearchTitle}"`,
+            );
 
-          if (!reminderToDelete) {
             reminderToDelete = await Reminder.findOne({
-              title: { $regex: new RegExp(reminderSearchTitle, "i") },
+              title: {
+                $regex: new RegExp(
+                  `^${escapeRegex(reminderSearchTitle)}$`,
+                  "i",
+                ),
+              },
             });
+
+            if (!reminderToDelete) {
+              reminderToDelete = await Reminder.findOne({
+                title: {
+                  $regex: new RegExp(escapeRegex(reminderSearchTitle), "i"),
+                },
+              });
+            }
           }
 
           if (!reminderToDelete) {
-            finalReply = `❌ Could not find a reminder titled "${reminderSearchTitle}".`;
+            finalReply = `❌ Could not find a reminder to delete.`;
             break;
           }
 
           console.log(`🗑️ Deleting reminder: "${reminderToDelete.title}"`);
 
-          // FIX: Clear reminderId from linked task BEFORE deleting reminder
+          // Clear reminderId from linked task BEFORE deleting reminder
           if (reminderToDelete.taskId) {
             const linkedTask = await Task.findById(reminderToDelete.taskId);
             if (linkedTask) {
@@ -2256,35 +3128,70 @@ app.post("/api/chat", async (req, res) => {
           }
 
           await Reminder.findByIdAndDelete(reminderToDelete._id);
+
+          // ✅ Clear reference after deletion
+          clearLastMentioned("reminder");
+
           break;
 
         case "DELETE_NOTE":
           console.log(`📝 Deleting note: "${action.searchQuery}"`);
 
-          let noteSearchTitle = action.searchQuery
-            .split("\n")[0]
-            .replace(/["']/g, "")
-            .trim();
-          console.log(`🔍 Searching for note to delete: "${noteSearchTitle}"`);
+          let noteToDelete = null;
 
-          let noteToDelete = await Note.findOne({
-            title: { $regex: new RegExp(`^${noteSearchTitle}$`, "i") },
-          });
+          // ✅ RESOLVE THE REFERENCE
+          if (action.searchQuery === "THIS_TASK_REFERENCE") {
+            const lastTaskId = getLastMentionedTaskId();
+            if (lastTaskId) {
+              const task = await Task.findById(lastTaskId);
+              if (task && task.noteId) {
+                noteToDelete = await Note.findById(task.noteId);
+                console.log(
+                  `📌 Using note from last mentioned task: "${noteToDelete?.title}"`,
+                );
+              }
+            }
+          } else if (action.searchQuery === "THIS_NOTE_REFERENCE") {
+            const lastNoteId = getLastMentionedNoteId();
+            if (lastNoteId) {
+              noteToDelete = await Note.findById(lastNoteId);
+              console.log(
+                `📌 Using last mentioned note: "${noteToDelete?.title}"`,
+              );
+            }
+          } else {
+            // Normal search by title
+            let noteSearchTitle = action.searchQuery
+              .split("\n")[0]
+              .replace(/["']/g, "")
+              .trim();
+            console.log(
+              `🔍 Searching for note to delete: "${noteSearchTitle}"`,
+            );
 
-          if (!noteToDelete) {
             noteToDelete = await Note.findOne({
-              title: { $regex: new RegExp(noteSearchTitle, "i") },
+              title: {
+                $regex: new RegExp(`^${escapeRegex(noteSearchTitle)}$`, "i"),
+              },
             });
+
+            if (!noteToDelete) {
+              noteToDelete = await Note.findOne({
+                title: {
+                  $regex: new RegExp(escapeRegex(noteSearchTitle), "i"),
+                },
+              });
+            }
           }
 
           if (!noteToDelete) {
-            finalReply = `❌ Could not find a note titled "${noteSearchTitle}".`;
+            finalReply = `❌ Could not find a note to delete.`;
             break;
           }
 
           console.log(`🗑️ Deleting note: "${noteToDelete.title}"`);
 
-          // FIX: Clear noteId from linked task BEFORE deleting note
+          // Clear noteId from linked task BEFORE deleting note
           if (noteToDelete.taskId) {
             const linkedTask = await Task.findById(noteToDelete.taskId);
             if (linkedTask) {
@@ -2302,6 +3209,10 @@ app.post("/api/chat", async (req, res) => {
           }
 
           await Note.findByIdAndDelete(noteToDelete._id);
+
+          // ✅ Clear reference after deletion
+          clearLastMentioned("note");
+
           break;
         case "UPDATE_REMINDER":
           console.log(`⏰ Updating reminder: "${action.searchQuery}"`);
@@ -2383,18 +3294,31 @@ app.post("/api/chat", async (req, res) => {
           }
           break;
 
-        case "CREATE_NOTE":
-          const newNote = new Note({
-            title: action.title || "Untitled",
-            content: action.content || "",
-          });
-
-          createdItem = await newNote.save();
-          actionResult = newNote;
-          finalReply = `✅ Note "${action.title}" has been saved!\n\n`;
-          break;
-
         case "CREATE_REMINDER":
+          console.log(`📝 Creating reminder:`);
+          console.log(`   Title: "${action.title}"`);
+          console.log(`   Remind At: "${action.remindAt}"`);
+
+          // ✅ Capitalize the title
+          const capitalizedReminderTitle = capitalizeTitle(action.title);
+          console.log(`   Capitalized title: "${capitalizedReminderTitle}"`);
+
+          // ✅ Check for duplicate reminder
+          const existingReminder = await isDuplicateReminder(
+            capitalizedReminderTitle,
+          );
+          if (existingReminder) {
+            finalReply =
+              `⚠️ Reminder "${capitalizedReminderTitle}" already exists!\n\n` +
+              `📋 Existing reminder details:\n` +
+              `| Field | Value |\n|-------|-------|\n` +
+              `| **Title** | ${existingReminder.title} |\n` +
+              `| **Time** | ${formatISTDate(existingReminder.remindAt)} |\n` +
+              `| **Linked Task** | ${existingReminder.taskId ? "Yes" : "No"} |\n\n` +
+              `💡 Use "update reminder ${existingReminder.title}" to modify it instead.`;
+            break;
+          }
+
           let remindAt = null;
           if (action.remindAt) {
             remindAt = await parseDate(action.remindAt);
@@ -2410,13 +3334,186 @@ app.post("/api/chat", async (req, res) => {
           }
 
           const reminder = new Reminder({
-            title: action.title,
+            title: capitalizedReminderTitle, // ✅ Use capitalized title
             remindAt: remindAt,
           });
 
           createdItem = await reminder.save();
           actionResult = reminder;
-          finalReply = `✅ Reminder "${action.title}" set for ${formatISTDate(remindAt)}!`;
+          finalReply = `✅ Reminder "${reminder.title}" set for ${formatISTDate(remindAt)}!`;
+          break;
+        case "SHOW_PIE_CHART":
+          console.log(`📊 Generating pie chart for type: ${action.chartType}`);
+
+          let chartUrl = null;
+          let chartTitle = "";
+          let statsTable = "";
+
+          try {
+            switch (action.chartType) {
+              case "status":
+                // Get task counts
+                const totalTasks = await Task.countDocuments();
+                const pendingTasks = await Task.countDocuments({
+                  completed: false,
+                });
+                const completedTasks = await Task.countDocuments({
+                  completed: true,
+                });
+                const overdueTasks = await Task.countDocuments({
+                  completed: false,
+                  dueDate: { $lt: getISTStartOfDay() },
+                });
+
+                const statusStats = {
+                  pending: pendingTasks,
+                  completed: completedTasks,
+                  overdue: overdueTasks,
+                };
+
+                chartUrl = generateStatusPieChartUrl(statusStats);
+                chartTitle = "📊 Task Status Distribution";
+
+                statsTable =
+                  `\n\n| Status | Count | Percentage |\n|--------|-------|------------|\n` +
+                  `| ⏳ Pending | ${pendingTasks} | ${totalTasks > 0 ? ((pendingTasks / totalTasks) * 100).toFixed(1) : 0}% |\n` +
+                  `| ✅ Completed | ${completedTasks} | ${totalTasks > 0 ? ((completedTasks / totalTasks) * 100).toFixed(1) : 0}% |\n` +
+                  `| ⚠️ Overdue | ${overdueTasks} | ${totalTasks > 0 ? ((overdueTasks / totalTasks) * 100).toFixed(1) : 0}% |\n` +
+                  `| **Total** | **${totalTasks}** | **100%** |`;
+                break;
+
+              case "priority":
+                const pendingTasksForPriority = await Task.find({
+                  completed: false,
+                });
+
+                if (pendingTasksForPriority.length === 0) {
+                  finalReply = `📊 No pending tasks found to show priority distribution.`;
+                  break;
+                }
+
+                chartUrl = generatePriorityPieChartUrl(pendingTasksForPriority);
+                chartTitle = "📊 Task Priority Distribution (Pending Tasks)";
+
+                const priorityCounts = {
+                  important: 0,
+                  high: 0,
+                  medium: 0,
+                  low: 0,
+                };
+                pendingTasksForPriority.forEach((task) => {
+                  if (priorityCounts[task.priority] !== undefined) {
+                    priorityCounts[task.priority]++;
+                  }
+                });
+
+                statsTable =
+                  `\n\n| Priority | Count | Percentage |\n|----------|-------|------------|\n` +
+                  `| 🔴 Important | ${priorityCounts.important} | ${((priorityCounts.important / pendingTasksForPriority.length) * 100).toFixed(1)}% |\n` +
+                  `| 🟠 High | ${priorityCounts.high} | ${((priorityCounts.high / pendingTasksForPriority.length) * 100).toFixed(1)}% |\n` +
+                  `| 🟡 Medium | ${priorityCounts.medium} | ${((priorityCounts.medium / pendingTasksForPriority.length) * 100).toFixed(1)}% |\n` +
+                  `| 🟢 Low | ${priorityCounts.low} | ${((priorityCounts.low / pendingTasksForPriority.length) * 100).toFixed(1)}% |\n` +
+                  `| **Total** | **${pendingTasksForPriority.length}** | **100%** |`;
+                break;
+
+              case "reminders":
+                const allReminders = await Reminder.find();
+
+                if (allReminders.length === 0) {
+                  finalReply = `⏰ No reminders found to show distribution.`;
+                  break;
+                }
+
+                chartUrl = generateReminderPieChartUrl(allReminders);
+                chartTitle = "⏰ Reminder Distribution";
+
+                // Calculate reminder stats
+                const todayStart = getISTStartOfDay();
+                const tomorrowStart = getISTStartOfNextDay();
+                const nextWeekStart = new Date(todayStart);
+                nextWeekStart.setDate(todayStart.getDate() + 7);
+
+                let todayCount = 0,
+                  tomorrowCount = 0,
+                  thisWeekCount = 0,
+                  futureCount = 0;
+                allReminders.forEach((reminder) => {
+                  const remindDate = new Date(reminder.remindAt);
+                  if (remindDate >= todayStart && remindDate < tomorrowStart)
+                    todayCount++;
+                  else if (
+                    remindDate >= tomorrowStart &&
+                    remindDate < nextWeekStart
+                  ) {
+                    if (remindDate.getDate() === tomorrowStart.getDate())
+                      tomorrowCount++;
+                    else thisWeekCount++;
+                  } else if (remindDate >= nextWeekStart) futureCount++;
+                });
+
+                statsTable =
+                  `\n\n| Period | Count | Percentage |\n|--------|-------|------------|\n` +
+                  `| 🔴 Today | ${todayCount} | ${((todayCount / allReminders.length) * 100).toFixed(1)}% |\n` +
+                  `| 🟠 Tomorrow | ${tomorrowCount} | ${((tomorrowCount / allReminders.length) * 100).toFixed(1)}% |\n` +
+                  `| 🟡 This Week | ${thisWeekCount} | ${((thisWeekCount / allReminders.length) * 100).toFixed(1)}% |\n` +
+                  `| 🔵 Future | ${futureCount} | ${((futureCount / allReminders.length) * 100).toFixed(1)}% |\n` +
+                  `| **Total** | **${allReminders.length}** | **100%** |`;
+                break;
+
+              default:
+                finalReply = `❌ Unknown chart type. Available: status, priority, reminders`;
+                break;
+            }
+
+            if (chartUrl) {
+              // Format response with image and table (like tables embed)
+              finalReply =
+                `## ${chartTitle}\n\n` +
+                `![Pie Chart](${chartUrl})\n` +
+                `${statsTable}\n\n` +
+                `💡 You can ask:\n` +
+                `• "show priority pie chart"\n` +
+                `• "show reminder distribution"\n` +
+                `• "list all tasks" for detailed view`;
+            }
+          } catch (error) {
+            console.error("Error generating pie chart:", error);
+            finalReply = `❌ Sorry, couldn't generate the chart. Please try again.`;
+          }
+          break;
+        case "CREATE_NOTE":
+          console.log(`📝 Creating note:`);
+          console.log(`   Title: "${action.title}"`);
+          console.log(`   Content: "${action.content?.substring(0, 100)}..."`);
+
+          // ✅ Capitalize the title
+          const capitalizedNoteTitle = capitalizeTitle(
+            action.title || "Untitled",
+          );
+          console.log(`   Capitalized title: "${capitalizedNoteTitle}"`);
+
+          // ✅ Check for duplicate note
+          const existingNote = await isDuplicateNote(capitalizedNoteTitle);
+          if (existingNote) {
+            finalReply =
+              `⚠️ Note "${capitalizedNoteTitle}" already exists!\n\n` +
+              `📋 Existing note details:\n` +
+              `| Field | Value |\n|-------|-------|\n` +
+              `| **Title** | ${existingNote.title} |\n` +
+              `| **Content Preview** | ${existingNote.content ? existingNote.content.substring(0, 100) : "Empty"} |\n` +
+              `| **Linked Task** | ${existingNote.taskId ? "Yes" : "No"} |\n\n` +
+              `💡 Use "update note ${existingNote.title}" to modify it instead.`;
+            break;
+          }
+
+          const newNote = new Note({
+            title: capitalizedNoteTitle, // ✅ Use capitalized title
+            content: action.content || "",
+          });
+
+          createdItem = await newNote.save();
+          actionResult = newNote;
+          finalReply = `✅ Note "${newNote.title}" has been saved!\n\n`;
           break;
       }
     }

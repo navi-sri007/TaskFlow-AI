@@ -127,13 +127,28 @@ async function parseDate(dateString) {
       if (!results.length) return null;
 
       const start = results[0].start;
-      const year = start.get("year");
+      let year = start.get("year");
       const month = start.get("month") - 1;
       const day = start.get("day");
+      console.log("No change");
+      console.log(year);
 
-      const hasExplicitTime = /(\d{1,2}:\d{2}\s*(am|pm)?|\d{1,2}\s*(am|pm))/i.test(
-        dateString,
-      );
+      // If chrono didn't set an explicit year, pick the next occurrence relative to IST "now"
+      const nowIst = getISTDateParts(now);
+      if (!start.isCertain || !start.isCertain("year") || year == null) {
+        year = nowIst.year;
+        // If parsed month/day is before today's IST date, advance to next year
+      }
+
+      // Handle two-digit years mistakenly parsed (e.g., '27' -> 2027)
+      if (typeof year === "number" && year > 0 && year < 100) {
+        year = 2000 + year;
+        console.log(year);
+        console.log("year+2000");
+      }
+
+      const hasExplicitTime =
+        /(\d{1,2}:\d{2}\s*(am|pm)?|\d{1,2}\s*(am|pm))/i.test(dateString);
 
       const hour = hasExplicitTime ? (start.get("hour") ?? 9) : 9;
       const minute = hasExplicitTime ? (start.get("minute") ?? 0) : 0;

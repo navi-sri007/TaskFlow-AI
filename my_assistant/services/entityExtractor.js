@@ -23,7 +23,9 @@ function normalizeEntityTitle(title) {
 }
 
 function isThisTaskPhrase(text) {
-  const t = String(text || "").toLowerCase().trim();
+  const t = String(text || "")
+    .toLowerCase()
+    .trim();
   return (
     t === "this task" ||
     t === "that task" ||
@@ -48,7 +50,25 @@ function messageRefersToThisTaskOnly(message) {
  */
 function extractEntityNameFromMessage(message) {
   if (!message) return null;
-  const msg = message.trim();
+  const msg = message.trim().toLowerCase();
+  const creationPatterns = [
+    /^create\s+a?\s*task/i,
+    /^add\s+a?\s*task/i,
+    /^new\s+task/i,
+    /^create\s+a?\s*reminder/i,
+    /^set\s+reminder/i,
+    /^create\s+a?\s*note/i,
+    /^add\s+note/i,
+  ];
+
+  for (const pattern of creationPatterns) {
+    if (pattern.test(message)) {
+      console.log(
+        `🚫 Skipping entity extraction - message is a creation command`,
+      );
+      return null;
+    }
+  }
 
   if (messageRefersToThisTaskOnly(msg)) {
     return "THIS_TASK_REFERENCE";
@@ -105,17 +125,72 @@ function normalizeSearchQuery(query) {
  * Prefer message-based title when AI searchQuery looks wrong or empty.
  */
 function resolveUpdateSearchQuery(userMessage, aiSearchQuery) {
+  // ✅ FIRST: Check if AI sent a reference
+  if (
+    aiSearchQuery === "THIS_TASK_REFERENCE" ||
+    aiSearchQuery === "THIS_REMINDER_REFERENCE" ||
+    aiSearchQuery === "THIS_NOTE_REFERENCE"
+  ) {
+    console.log(`✅ Keeping reference: "${aiSearchQuery}"`);
+    return aiSearchQuery;
+  }
+
+  // ✅ SECOND: Check if user message contains reference phrases
+  const msg = userMessage.toLowerCase();
+  if (
+    msg.includes("this reminder") ||
+    msg.includes("that reminder") ||
+    msg === "this reminder"
+  ) {
+    console.log(
+      `✅ User message refers to "this reminder" → returning THIS_REMINDER_REFERENCE`,
+    );
+    return "THIS_REMINDER_REFERENCE";
+  }
+
+  if (
+    msg.includes("this task") ||
+    msg.includes("that task") ||
+    msg === "this task"
+  ) {
+    console.log(
+      `✅ User message refers to "this task" → returning THIS_TASK_REFERENCE`,
+    );
+    return "THIS_TASK_REFERENCE";
+  }
+
+  if (
+    msg.includes("this note") ||
+    msg.includes("that note") ||
+    msg === "this note"
+  ) {
+    console.log(
+      `✅ User message refers to "this note" → returning THIS_NOTE_REFERENCE`,
+    );
+    return "THIS_NOTE_REFERENCE";
+  }
+
+  // ✅ THIRD: Try to extract from message
   const fromMessage = extractEntityNameFromMessage(userMessage);
+  if (
+    fromMessage === "THIS_TASK_REFERENCE" ||
+    fromMessage === "THIS_REMINDER_REFERENCE" ||
+    fromMessage === "THIS_NOTE_REFERENCE"
+  ) {
+    return fromMessage;
+  }
+
+  // ✅ FOURTH: Clean the AI search query
   const fromAi = normalizeSearchQuery(aiSearchQuery);
 
-  if (fromMessage === "THIS_TASK_REFERENCE") return "THIS_TASK_REFERENCE";
-
-  if (fromMessage) {
+  // ✅ FIFTH: Prefer message extraction if it looks valid
+  if (fromMessage && !/^(due|to|priority|and)$/i.test(fromMessage)) {
     const aiLooksWrong =
       !fromAi ||
-      /^of\s+(?:the\s+)?task/i.test(fromAi) ||
-      /\btime$/i.test(fromAi) ||
+      fromAi.includes('"') ||
+      fromAi.includes("due") ||
       fromAi.length > fromMessage.length + 10;
+
     if (aiLooksWrong || fromAi.toLowerCase() !== fromMessage.toLowerCase()) {
       console.log(
         `🔧 Resolved search: AI="${fromAi}" → message="${fromMessage}"`,
@@ -124,7 +199,36 @@ function resolveUpdateSearchQuery(userMessage, aiSearchQuery) {
     }
   }
 
-  return fromAi || fromMessage || "";
+  // ✅ SIXTH: Clean the AI result
+  let cleaned = fromAi || fromMessage || "";
+  cleaned = cleaned.replace(/["']/g, "");
+  cleaned = cleaned.replace(/\s+(due|to|priority|and)$/i, "");
+  cleaned = cleaned.trim();
+
+  // ✅ FINAL: If it's still "this reminder" or similar, convert to reference
+  if (
+    cleaned === "this reminder" ||
+    cleaned === "that reminder" ||
+    cleaned === "reminder"
+  ) {
+    return "THIS_REMINDER_REFERENCE";
+  }
+  if (
+    cleaned === "this task" ||
+    cleaned === "that task" ||
+    cleaned === "task"
+  ) {
+    return "THIS_TASK_REFERENCE";
+  }
+  if (
+    cleaned === "this note" ||
+    cleaned === "that note" ||
+    cleaned === "note"
+  ) {
+    return "THIS_NOTE_REFERENCE";
+  }
+
+  return cleaned;
 }
 
 module.exports = {

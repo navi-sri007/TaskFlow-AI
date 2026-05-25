@@ -453,7 +453,7 @@ function extractEntityName(message) {
 
   let cleaned = cleanMessage(message);
   cleaned = cleaned.replace(
-    /\b(give|delete|show|priority|tell|its|time|display|same|list|which|is|completed|are|pending|with|fetch|details?|of|the|in|as|tabular|form|table|format|for|me|please|what|is|content|tasks?|reminders?|notes?|memo|everything|related|associated|linked|to|set|a|create|add)\b/g,
+    /\b(give|delete|show|priority|tell|its|time|display|due|duedate|same|list|which|is|completed|are|pending|with|fetch|details?|of|the|in|as|tabular|form|table|format|for|me|please|what|is|content|tasks?|reminders?|notes?|memo|everything|task|due|related|associated|linked|to|set|a|create|add)\b/g,
     "",
   );
   cleaned = cleaned.replace(/["'?]/g, "").replace(/\s+/g, " ").trim();
@@ -1205,6 +1205,65 @@ async function handleListRequest(message) {
 }
 async function fetchRelevantData(userMessage) {
   let message = userMessage.toLowerCase();
+  const creationKeywords = [
+    "create a task",
+    "create task",
+    "add task",
+    "new task",
+    "create a reminder",
+    "create reminder",
+    "set reminder",
+    "new reminder",
+    "create a note",
+    "create note",
+    "add note",
+    "new note",
+    "create a",
+    "add a",
+    "make a",
+  ];
+
+  for (const keyword of creationKeywords) {
+    if (message.includes(keyword)) {
+      console.log(
+        `🚫 Skipping context fetch - message appears to be a creation command: "${keyword}"`,
+      );
+      return { tasks: [], reminders: [], notes: [] }; // Return empty context
+    }
+  }
+
+  // Also skip update commands that shouldn't search
+  const updateKeywords = [
+    "update task",
+    "update reminder",
+    "update note",
+    "modify",
+    "change",
+  ];
+  for (const keyword of updateKeywords) {
+    if (message.includes(keyword)) {
+      console.log(
+        `🚫 Skipping context fetch - message appears to be an update command`,
+      );
+      return { tasks: [], reminders: [], notes: [] };
+    }
+  }
+
+  // Also skip delete commands
+  const deleteKeywords = [
+    "delete task",
+    "delete reminder",
+    "delete note",
+    "remove task",
+  ];
+  for (const keyword of deleteKeywords) {
+    if (message.includes(keyword)) {
+      console.log(
+        `🚫 Skipping context fetch - message appears to be a delete command`,
+      );
+      return { tasks: [], reminders: [], notes: [] };
+    }
+  }
   let context = { tasks: [], notes: [], reminders: [] };
 
   // Wrap extractEntityName to auto-correct typos

@@ -77,6 +77,7 @@ TABLE INDEXING & POSITION REFERENCES
 
 IMPORTANT: When you display a table/list of tasks, reminders, or notes, the system automatically indexes them (1, 2, 3, etc.).
 
+ALWAYS TRY THIS ACTION, when a message comes after listing any table. 
 Users can refer to items by their position using:
 - "first one", "second task", "third reminder"
 - "last one", "last item"
@@ -101,7 +102,7 @@ POSITION REFERENCE PATTERNS:
 | "get the 2nd note" | GET_BY_POSITION|second |
 | "details of the 5th item" | GET_BY_POSITION|5 |
 
-Always use GET_BY_POSITION action when user refers to items by position.
+Always use GET_BY_POSITION action when user refers to items by position and never confuse with GET_NOTE
 
 ===========================
 CRITICAL ACTION FORMATTING RULES:
@@ -163,6 +164,8 @@ UPDATE_REMINDER|title|field|value
 UPDATE_NOTE|title|field|value
 
 **Get Actions (Single Entity):**
+ONLY use GET_TASK,GET_NOOTE,GET_REMINDER when the user asks about specific task name , not when mentioning any index number like first , second, 1 , 4, last etc..
+
 GET_TASK|title
 GET_NOTE|title
 GET_REMINDER|title
@@ -210,7 +213,7 @@ User: "show content of meeting notes"
 User: "what does the note say"
 → ACTION: GET_NOTE_CONTENT|meeting notes
 
-For "this task", "this note", "this reminder":
+For "this task", "this note", "this reminder", :
 → Use searchQuery: "THIS_TASK_REFERENCE", "THIS_NOTE_REFERENCE", "THIS_REMINDER_REFERENCE"
 
 ===========================================
@@ -243,62 +246,146 @@ Examples:
 - Special: has-reminder, has-note, no-reminder, no-note, today, tomorrow
 - Date ranges: next-3-days, next-5-days, next-7-days, overdue
 
-===========================================
-MULTI-PARAMETER UPDATE REQUESTS:
-===========================================
+// In getSystemPrompt() function, replace the multi-field update section:
 
-When user wants to update multiple fields at once:
-
-**MULTI-UPDATE FORMAT:** UPDATE_TASK|{searchQuery}|{field1}→{value1}|{field2}→{value2}
-
-Examples:
-"Update both priority and due date for Pay bills"
-→ ACTION: UPDATE_TASK|Pay bills|priority→high|dueDate→tomorrow
-
-"Change title to Shopping and priority to high for grocery task"
-→ ACTION: UPDATE_TASK|grocery|title→Shopping|priority→high
-
-"Update reminder time to 5pm and add note to Meeting task"
-→ ACTION: UPDATE_TASK|Meeting|dueDate→5pm|note→Add agenda items
-
-"Set this task to high priority and mark as completed"
-→ ACTION: UPDATE_TASK|THIS_TASK_REFERENCE|priority→high|completed→true
-
-**Multi-update patterns for reminders:**
-"Update reminder time to 3pm and title to Call Dentist"
-→ ACTION: UPDATE_REMINDER|Call dentist|remindAt→3pm|title→Call Dentist
-
-**Multi-update patterns for notes:**
-"Update note title to Ideas and add content about AI"
-→ ACTION: UPDATE_NOTE|Old title|title→Ideas|content→AI project ideas
-
-**Format rules for multi-updates:**
-- Separate each field-value pair with "|"
-- Use "→" between field name and value
-- Keep the search query as the first parameter after UPDATE_TYPE
-- Values can contain spaces (they will be trimmed)
-- Use THIS_TASK_REFERENCE for context reference
 
 ===========================================
-LISTING ACTIONS:
+MULTI-FIELD UPDATE ACTIONS (CRITICAL!)
 ===========================================
 
-| User Says | ACTION Output |
-|-----------|---------------|
-| "list pending tasks" | ACTION: LIST_TASKS|pending |
-| "what's pending for this weekend" | ACTION: LIST_TASKS|pending|weekend |
-| "list pending tasks with reminders" | ACTION: LIST_TASKS|pending|has-reminder |
-| "show me what's important" | ACTION: LIST_TASKS|important |
-| "what's overdue" | ACTION: LIST_TASKS|overdue |
-| "show tasks due today" | ACTION: LIST_TASKS|today |
-| "tasks for tomorrow" | ACTION: LIST_TASKS|tomorrow |
-| "day after tomorrow tasks" | ACTION: LIST_TASKS|day-after-tomorrow |
-| "high priority tasks" | ACTION: LIST_TASKS|high |
-| "tasks due this week" | ACTION: LIST_TASKS|this-week |
-| "completed tasks" | ACTION: LIST_TASKS|completed |
-| "tasks due in next 3 days" | ACTION: LIST_TASKS|next-3-days |
-| "due in next 5 days" | ACTION: LIST_TASKS|next-5-days |
-| "what's due in the next week" | ACTION: LIST_TASKS|next-7-days |
+IMPORTANT: When user wants to update MULTIPLE fields in ONE message, you MUST use:
+
+ACTION: UPDATE_TASK_MULTI
+searchQuery: "task title or THIS_TASK_REFERENCE"
+updates: {"field1": "value1", "field2": "value2"}
+
+DO NOT use UPDATE_TASK with pipe format for multiple fields!
+
+EXAMPLES:
+
+User: "update task congrats to tomorrow and priority to important"
+YOU MUST RESPOND EXACTLY LIKE THIS:
+ACTION: UPDATE_TASK_MULTI
+searchQuery: "congrats"
+updates: {"dueDate": "tomorrow", "priority": "important"}
+
+User: "update meeting due to next monday and set priority high"
+RESPONSE:
+ACTION: UPDATE_TASK_MULTI
+searchQuery: "meeting"
+updates: {"dueDate": "next monday", "priority": "high"}
+
+User: "change task groceries title to weekly shopping and due to friday"
+RESPONSE:
+ACTION: UPDATE_TASK_MULTI
+searchQuery: "groceries"
+updates: {"title": "weekly shopping", "dueDate": "friday"}
+
+User: "mark project as completed and set priority important"
+RESPONSE:
+ACTION: UPDATE_TASK_MULTI
+searchQuery: "project"
+updates: {"completed": "true", "priority": "important"}
+
+User: "update its due to tomorrow and priority to low"
+RESPONSE:
+ACTION: UPDATE_TASK_MULTI
+searchQuery: "THIS_TASK_REFERENCE"
+updates: {"dueDate": "tomorrow", "priority": "low"}
+
+UPDATE_NOTE_MULTI - Update multiple note fields:
+ACTION: UPDATE_NOTE_MULTI
+searchQuery: "note title or THIS_TASK_REFERENCE"
+updates: {"title": "team meeting", "content": "discussed Q4 plans"}
+update note meeting  change title to team meeting  and add content discussed Q4 plans
+
+ACTION: UPDATE_REMINDER_MULTI
+searchQuery: "meeting"
+updates: {"remindAt": "tomorrow 10am", "title": "team sync"}
+I'll update the reminder "meeting" to tomorrow at 10am and rename it to "team sync".
+
+REMEMBER:
+- If message contains "and" with two different update types → USE UPDATE_TASK_MULTI
+- If message contains multiple fields to update → USE UPDATE_TASK_MULTI
+- The updates object MUST be valid JSON format
+- Only use single UPDATE_TASK when exactly ONE field is being updated
+
+
+===========================================
+CRITICAL: LIST_TASKS WITH DATE RANGES
+===========================================
+
+When user asks for tasks BETWEEN two dates, you MUST output:
+
+ACTION: LIST_TASKS|pending|date-range|START_DATE|END_DATE
+
+Where START_DATE and END_DATE are EXACTLY as the user said.
+
+EXAMPLES:
+
+User: "list the tasks between 15 may to today"
+OUTPUT:
+ACTION: LIST_TASKS|pending|date-range|15 may|today
+
+User: "list the tasks between 15 may to 20 may"
+OUTPUT:
+ACTION: LIST_TASKS|pending|date-range|15 may|20 may
+
+User: "show tasks from june 1 to june 15"
+OUTPUT:
+ACTION: LIST_TASKS|pending|date-range|june 1|june 15
+
+User: "tasks due between last monday and next friday"
+OUTPUT:
+ACTION: LIST_TASKS|pending|date-range|last monday|next friday
+
+User: "what tasks are due from may 1st until may 10th"
+OUTPUT:
+ACTION: LIST_TASKS|pending|date-range|may 1st|may 10th
+
+===========================================
+LIST_TASKS WITH SINGLE DATE
+===========================================
+
+When user asks for tasks on a SPECIFIC date:
+
+User: "tasks due on may 25"
+OUTPUT:
+ACTION: LIST_TASKS|pending|specific-date|may 25
+
+User: "what's due tomorrow"
+OUTPUT:
+ACTION: LIST_TASKS|tomorrow
+
+===========================================
+LIST_REMINDERS WITH DATE RANGES
+===========================================
+
+User: "list reminders of this week"
+OUTPUT:
+ACTION: LIST_REMINDERS|this-week
+
+User: "reminders between monday and friday"
+OUTPUT:
+ACTION: LIST_REMINDERS|date-range|monday|friday
+
+===========================================
+FORMAT RULES:
+===========================================
+- Use pipe (|) as separator ONLY
+- DO NOT add extra spaces or quotes
+- Keep dates EXACTLY as user typed
+- For date-range, the third parameter MUST be "date-range"
+- Then fourth parameter is start date
+- Then fifth parameter is end date
+
+EXAMPLE CORRECT OUTPUT:
+ACTION: LIST_TASKS|pending|date-range|15 may|20 may
+
+EXAMPLE WRONG OUTPUT (DO NOT DO THIS):
+ACTION: LIST_TASKS|pending|15 may|20 may
+ACTION: LIST_TASKS date-range 15 may to 20 may
+
 
 **FILTER FORMAT:** LIST_TASKS|{status}|{special}
 Where status: pending, completed, important, high, medium, low, overdue, next-3-days, next-5-days, next-7-days
@@ -372,6 +459,79 @@ User: "set reminder for this task to 3pm"
 
 User: "change Pay bills reminder to 5pm"
 → ACTION: UPDATE_REMINDER|Pay bills|remindAt|5pm
+// In getSystemPrompt() function, add after LIST_TASKS section:
+
+===========================================
+COUNT ACTIONS (GET COUNTS ONLY)
+===========================================
+
+When user asks for a COUNT of items, use COUNT_ENTITY action.
+
+FORMAT: ACTION: COUNT_ENTITY|{entity}|{filters}
+
+EXAMPLES:
+
+User: "how many tasks do I have"
+→ ACTION: COUNT_ENTITY|tasks|all
+
+User: "count pending tasks"
+→ ACTION: COUNT_ENTITY|tasks|pending
+
+User: "how many overdue tasks"
+→ ACTION: COUNT_ENTITY|tasks|overdue
+
+User: "show me count of reminders"
+→ ACTION: COUNT_ENTITY|reminders|all
+
+User: "how many notes are there"
+→ ACTION: COUNT_ENTITY|notes|all
+
+User: "count high priority tasks"
+→ ACTION: COUNT_ENTITY|tasks|high
+
+User: "how many pending tasks with reminders"
+→ ACTION: COUNT_ENTITY|tasks|pending|has-reminder
+
+User: "count of tasks due today"
+→ ACTION: COUNT_ENTITY|tasks|today
+
+User: "how many important tasks are pending"
+→ ACTION: COUNT_ENTITY|tasks|important|pending
+
+User: "tell me number of completed tasks"
+→ ACTION: COUNT_ENTITY|tasks|completed
+
+User: "count of upcoming reminders"
+→ ACTION: COUNT_ENTITY|reminders|upcoming
+
+Available filters:
+- tasks: all, pending, completed, overdue, today, tomorrow, this-week, high, medium, low, important, has-reminder, has-note
+- reminders: all, today, tomorrow, upcoming
+- notes: all, linked, standalone, with-content
+// In getSystemPrompt() function, add:
+
+===========================================
+PIE CHART ACTIONS
+===========================================
+
+When user asks for a visual representation or chart:
+
+ACTION: SHOW_PIE_CHART|status
+ACTION: SHOW_PIE_CHART|priority  
+ACTION: SHOW_PIE_CHART|reminders
+
+EXAMPLES:
+User: "show me a pie chart"
+ACTION: SHOW_PIE_CHART|status
+
+User: "show priority pie chart"
+ACTION: SHOW_PIE_CHART|priority
+
+User: "visualize reminder distribution"
+ACTION: SHOW_PIE_CHART|reminders
+
+User: "show chart of my tasks"
+ACTION: SHOW_PIE_CHART|status
 
 ===========================================
 CREATE TASK RULES:
@@ -451,12 +611,10 @@ CRITICAL INSTRUCTION - READ FIRST:
 ===========================================
 
 If the DATABASE context contains a task with title matching what the user asked for:
-- DO NOT output ACTION: LIST_TASKS
 - DISPLAY the task directly in table format
 
-ONLY use ACTION: LIST_TASKS when:
-- User explicitly says "list all tasks"
-- The context has NO tasks (empty)
+ use ACTION: LIST_TASKS when:
+- User  says "list all tasks" , "give tasks" ,"list the tasks"
 
 ===========================================
 FINAL INSTRUCTION:
@@ -674,7 +832,51 @@ function extractAction(response) {
       type: "SHOW_STATS",
     };
   }
+  // In extractAction function, add after LIST_REMINDERS section:
 
+  // ============================================
+  // COUNT_ENTITY action
+  // ============================================
+  if (response.includes("ACTION: COUNT_ENTITY")) {
+    // Match: ACTION: COUNT_ENTITY|entity|filter1|filter2...
+    const match = response.match(
+      /ACTION: COUNT_ENTITY\|\s*(\w+)\s*(?:\|(.+?))?(?:\n|$)/,
+    );
+    if (match) {
+      const entity = match[1].trim().toLowerCase();
+      const filters = match[2] ? match[2].trim() : "all";
+      console.log(
+        `🔢 COUNT_ENTITY action extracted: entity=${entity}, filters=${filters}`,
+      );
+      return {
+        type: "COUNT_ENTITY",
+        entity: entity,
+        filters: filters,
+      };
+    }
+  }
+  // In extractAction function, also handle pipe format for SHOW_PIE_CHART
+  if (response.includes("ACTION: SHOW_PIE_CHART")) {
+    // Handle format: ACTION: SHOW_PIE_CHART|status
+    const match = response.match(/ACTION: SHOW_PIE_CHART\|([^\n]+)/);
+    if (match) {
+      const chartType = match[1].trim().toLowerCase();
+      console.log(`📊 SHOW_PIE_CHART action extracted: type=${chartType}`);
+      return {
+        type: "SHOW_PIE_CHART",
+        chartType: chartType,
+      };
+    }
+
+    // Handle format: ACTION: SHOW_PIE_CHART (default to status)
+    if (response.includes("ACTION: SHOW_PIE_CHART")) {
+      console.log(`📊 SHOW_PIE_CHART action extracted (default status)`);
+      return {
+        type: "SHOW_PIE_CHART",
+        chartType: "status",
+      };
+    }
+  }
   // SHOW_DASHBOARD action
   if (response.includes("ACTION: SHOW_DASHBOARD")) {
     console.log("📊 SHOW_DASHBOARD action extracted");
@@ -745,9 +947,39 @@ function extractAction(response) {
     }
   }
 
+  // In extractAction function, update the UPDATE_TASK_MULTI detection:
+
   // ============================================
   // MULTI-PARAMETER UPDATE_TASK (with multiple fields)
   // ============================================
+  // Check for JSON format first
+  if (response.includes("ACTION: UPDATE_TASK_MULTI")) {
+    console.log("🔄 Detected UPDATE_TASK_MULTI action");
+
+    // Try to extract searchQuery
+    const searchMatch = response.match(/searchQuery:\s*"([^"]+)"/);
+    const updatesMatch = response.match(/updates:\s*({[^}]+})/);
+
+    if (searchMatch && updatesMatch) {
+      try {
+        const searchQuery = searchMatch[1];
+        const updates = JSON.parse(updatesMatch[1].replace(/'/g, '"'));
+        console.log(`🔄 MULTI-UPDATE_TASK action extracted:`, {
+          searchQuery,
+          updates,
+        });
+        return {
+          type: "UPDATE_TASK_MULTI",
+          searchQuery: searchQuery,
+          updates: updates,
+        };
+      } catch (e) {
+        console.log("Failed to parse updates JSON:", e);
+      }
+    }
+  }
+
+  // Fallback for pipe format (backward compatibility)
   if (response.includes("ACTION: UPDATE_TASK") && response.includes("→")) {
     const match = response.match(/ACTION: UPDATE_TASK\|([^|]+)\|(.+)$/);
     if (match) {
@@ -762,7 +994,7 @@ function extractAction(response) {
         }
       }
 
-      console.log(`🔄 MULTI-UPDATE_TASK action extracted:`, {
+      console.log(`🔄 MULTI-UPDATE_TASK action extracted (pipe format):`, {
         searchQuery,
         updates,
       });
@@ -886,24 +1118,94 @@ function extractAction(response) {
   // ============================================
   // LIST ACTIONS
   // ============================================
-
-  // LIST_TASKS action
+  // In extractAction function, update LIST_TASKS parsing
+  // In extractAction function, update LIST_TASKS parsing
   if (response.includes("ACTION: LIST_TASKS")) {
-    const match = response.match(
-      /ACTION: LIST_TASKS(?:\|([^|]+))?(?:\|([^|]+))?/,
+    console.log("📋 Raw response:", response.substring(0, 200));
+
+    // Pattern 1: date-range with 5 parameters (status, type, from, to)
+    let match = response.match(
+      /ACTION: LIST_TASKS\|([^|]+)\|date-range\|([^|]+)\|([^\n]+)/i,
     );
-    console.log("📋 LIST_TASKS action extracted");
+    if (match) {
+      const status = cleanValue(match[1]);
+      const fromDate = cleanValue(match[2]);
+      const toDate = cleanValue(match[3]);
+      console.log(
+        `📋 LIST_TASKS date-range: status="${status}", from="${fromDate}", to="${toDate}"`,
+      );
+      return {
+        type: "LIST_TASKS",
+        status: status,
+        dateRangeType: "date-range",
+        dateFrom: fromDate,
+        dateTo: toDate,
+        special: null,
+      };
+    }
 
-    const status = match?.[1] ? cleanValue(match[1]) : "all";
-    const special = match?.[2] ? cleanValue(match[2]) : null;
+    // Pattern 2: specific-date with 3 parameters (status, type, date)
+    match = response.match(
+      /ACTION: LIST_TASKS\|([^|]+)\|specific-date\|([^\n]+)/i,
+    );
+    if (match) {
+      const status = cleanValue(match[1]);
+      const specificDate = cleanValue(match[2]);
+      console.log(
+        `📋 LIST_TASKS specific-date: status="${status}", date="${specificDate}"`,
+      );
+      return {
+        type: "LIST_TASKS",
+        status: status,
+        dateRangeType: "specific-date",
+        specificDate: specificDate,
+        dateFrom: null,
+        dateTo: null,
+        special: null,
+      };
+    }
 
-    console.log(`   Status: "${status}", Special: "${special}"`);
+    // Pattern 3: regular with special (2 parameters)
+    match = response.match(/ACTION: LIST_TASKS\|([^|]+)\|([^\n]+)/);
+    if (match) {
+      const status = cleanValue(match[1]);
+      const special = cleanValue(match[2]);
+      console.log(
+        `📋 LIST_TASKS special: status="${status}", special="${special}"`,
+      );
+      return {
+        type: "LIST_TASKS",
+        status: status,
+        special: special,
+        dateRangeType: null,
+        dateFrom: null,
+        dateTo: null,
+      };
+    }
 
+    // Pattern 4: status only (1 parameter)
+    match = response.match(/ACTION: LIST_TASKS\|([^\n]+)/);
+    if (match) {
+      const status = cleanValue(match[1]);
+      console.log(`📋 LIST_TASKS status only: status="${status}"`);
+      return {
+        type: "LIST_TASKS",
+        status: status,
+        special: null,
+        dateRangeType: null,
+        dateFrom: null,
+        dateTo: null,
+      };
+    }
+
+    // Default
     return {
       type: "LIST_TASKS",
-      status: status,
-      special: special,
-      filter: status,
+      status: "pending",
+      special: null,
+      dateRangeType: null,
+      dateFrom: null,
+      dateTo: null,
     };
   }
 
