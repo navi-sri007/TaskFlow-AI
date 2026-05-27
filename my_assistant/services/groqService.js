@@ -533,6 +533,31 @@ ACTION: SHOW_PIE_CHART|reminders
 User: "show chart of my tasks"
 ACTION: SHOW_PIE_CHART|status
 
+// In groqService.js system prompt
+
+===========================================
+LEARNING & ADAPTATION ACTIONS
+===========================================
+
+ALWAYS return these ACTION when the word "learn" comes
+ACTION: LEARN_PATTERNS|analyze
+ACTION: LEARN_PATTERNS|suggest
+ACTION: LEARN_PATTERNS|insights
+
+EXAMPLES:
+User: "learn my task patterns"
+ACTION: LEARN_PATTERNS|analyze
+
+User: "what have you learned about me?"
+ACTION: LEARN_PATTERNS|insights
+
+User: "suggest based on my patterns"
+ACTION: LEARN_PATTERNS|suggest
+
+User: "adapt to my working style"
+ACTION: LEARN_PATTERNS|analyze
+
+
 ===========================================
 CREATE TASK RULES:
 ===========================================
@@ -1399,7 +1424,27 @@ function extractAction(response) {
       };
     }
   }
+  // ============================================
+  // LEARN_PATTERNS ACTION
+  // ============================================
+  if (response.includes("ACTION: LEARN_PATTERNS")) {
+    const match = response.match(/ACTION: LEARN_PATTERNS\|([^\n]+)/);
+    if (match) {
+      const learnAction = match[1].trim().toLowerCase();
+      console.log(`🧠 LEARN_PATTERNS action extracted: ${learnAction}`);
+      return {
+        type: "LEARN_PATTERNS",
+        learnAction: learnAction,
+      };
+    }
 
+    // Default fallback
+    console.log(`🧠 LEARN_PATTERNS action extracted (default analyze)`);
+    return {
+      type: "LEARN_PATTERNS",
+      learnAction: "analyze",
+    };
+  }
   // CREATE_REMINDER action
   if (response.includes("ACTION: CREATE_REMINDER")) {
     const match = response.match(/ACTION: CREATE_REMINDER\|([^|]+)\|([^|\n]+)/);

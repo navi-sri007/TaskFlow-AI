@@ -37,6 +37,7 @@ const ChatSchema = new mongoose.Schema({
       "GET_BY_POSITION",
       "COUNT_ENTITY",
       "SHOW_PIE_CHART",
+      "LEARN_PATTERNS",
     ],
     default: null,
   },

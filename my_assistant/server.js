@@ -16,6 +16,7 @@ const Task = require("./models/Task.js");
 const Note = require("./models/Note.js");
 const Reminder = require("./models/Reminder.js");
 const Chat = require("./models/Chat.js");
+const UserPattern = require("./models/UserPattern");
 const { getAIResponse } = require("./services/groqService");
 const {
   fetchRelevantData,
@@ -70,6 +71,12 @@ const {
   parsePositionReference,
   getItemByPosition,
 } = require("./services/dataFetcher");
+const {
+  updateUserPattern,
+  getPersonalizedSuggestions,
+  suggestPriority,
+} = require("./services/patternLearning");
+
 const { parseDate, testDateParser } = require("./services/dateParser");
 const { applyDateTimeUpdate } = require("./services/dateUpdate");
 const {
@@ -1558,14 +1565,104 @@ app.post("/api/chat", async (req, res) => {
           if (autoError) {
             successMessage += `\n⚠️ Note: Auto-reminder/note creation had issues, but task was saved.`;
           }
+          await updateUserPattern(sessionId, "CREATE_TASK", {
+            title: action.title,
+            priority: action.priority || "medium",
+          });
 
+          // 🧠 Get personalized priority suggestion
+          const suggestedPriority = await suggestPriority(
+            sessionId,
+            action.title,
+          );
+          if (suggestedPriority !== (action.priority || "medium")) {
+            finalReply += `\n\n💡 Based on your patterns, you might want to set this as **${suggestedPriority}** priority.`;
+          }
           createdItem = savedTask;
           actionResult = savedTask;
           finalReply = successMessage.trim();
           break;
 
         // Add after existing cases in the chat endpoint
+        case "LEARN_PATTERNS":
+          console.log(`🧠 Learning patterns for session: ${sessionId}`);
 
+          const learnAction = action.learnAction || "analyze";
+
+          switch (learnAction) {
+            case "analyze":
+              // Analyze and update patterns based on user's task history
+              const allTasks = await Task.find();
+              const completedTasks = await Task.find({ completed: true });
+
+              // Update pattern with historical data
+              for (const task of allTasks) {
+                if (task.completed) {
+                  await updateUserPattern(sessionId, "COMPLETE_TASK", {
+                    title: task.title,
+                    priority: task.priority,
+                    createdAt: task.createdAt,
+                    completedAt: task.updatedAt,
+                  });
+                } else {
+                  await updateUserPattern(sessionId, "CREATE_TASK", {
+                    title: task.title,
+                    priority: task.priority,
+                  });
+                }
+              }
+
+              const insights = await getPersonalizedSuggestions(sessionId);
+
+              finalReply =
+                `🧠 **I've analyzed your patterns!**\n\n` +
+                `📊 **Your Stats:**\n` +
+                `| Metric | Value |\n|--------|-------|\n` +
+                `| Tasks Created | ${allTasks.length} |\n` +
+                `| Tasks Completed | ${completedTasks.length} |\n` +
+                `| Completion Rate | ${((completedTasks.length / allTasks.length) * 100).toFixed(1)}% |\n\n` +
+                `💡 **Personalized Insights:**\n${insights.map((s) => `• ${s}`).join("\n")}`;
+              break;
+
+            case "suggest":
+              // Get personalized suggestions
+              const suggestions = await getPersonalizedSuggestions(sessionId);
+
+              if (!suggestions || suggestions.length === 0) {
+                finalReply = `🧠 I need more data to learn your patterns. Create and complete more tasks first!`;
+              } else {
+                finalReply = `🧠 **Based on your work patterns:**\n\n${suggestions.map((s, i) => `${i + 1}. ${s}`).join("\n")}`;
+              }
+              break;
+
+            case "insights":
+              // Deep insights about user behavior
+              const pattern = await UserPattern.findOne({ sessionId });
+
+              if (!pattern || pattern.interactions.totalTasksCreated < 5) {
+                finalReply = `📊 Not enough data yet. Complete at least 5 tasks for meaningful insights!`;
+              } else {
+                const completionRate =
+                  (pattern.interactions.totalTasksCompleted /
+                    pattern.interactions.totalTasksCreated) *
+                  100;
+
+                finalReply =
+                  `📊 **Your Work Pattern Insights**\n\n` +
+                  `| Metric | Value |\n|--------|-------|\n` +
+                  `| 🎯 Most Productive Hour | ${pattern.taskCreation.mostActiveHour}:00 |\n` +
+                  `| 📅 Most Productive Day | ${pattern.taskCreation.mostActiveDay} |\n` +
+                  `| ⭐ Default Priority | ${pattern.taskCreation.averagePriority} |\n` +
+                  `| ✅ Completion Rate | ${completionRate.toFixed(1)}% |\n` +
+                  `| 🏆 Best Priority | ${pattern.completion.bestPerformingPriority || "N/A"} |\n` +
+                  `| ⏰ Morning Productivity | ${pattern.timePatterns.morningProductivity} tasks |\n` +
+                  `| ☀️ Afternoon Productivity | ${pattern.timePatterns.afternoonProductivity} tasks |\n` +
+                  `| 🌙 Evening Productivity | ${pattern.timePatterns.eveningProductivity} tasks |\n\n` +
+                  `🔑 **Top Keywords in your tasks:**\n${pattern.taskCreation.commonKeywords.slice(0, 10).join(", ")}`;
+              }
+              break;
+          }
+          break;
         case "GET_BY_POSITION":
           console.log(`📍 Getting item by position: "${action.position}"`);
 
@@ -2763,7 +2860,28 @@ app.post("/api/chat", async (req, res) => {
               taskToUpdate.completed = isCompleted;
 
               updates.completed = true;
+              if (
+                action.field === "completed" &&
+                (action.newValue === "true" || action.newValue === "completed")
+              ) {
+                await updateUserPattern(sessionId, "COMPLETE_TASK", {
+                  title: taskToUpdate.title,
+                  priority: taskToUpdate.priority,
+                  createdAt: taskToUpdate.createdAt,
+                  completedAt: new Date(),
+                });
+              }
 
+              // If postponing (due date moved forward)
+              if (
+                action.field === "dueDate" &&
+                taskToUpdate.dueDate > oldDueDate
+              ) {
+                await updateUserPattern(sessionId, "POSTPONE_TASK", {
+                  title: taskToUpdate.title,
+                });
+              }
+              break;
               await taskToUpdate.save();
 
               finalReply = isCompleted

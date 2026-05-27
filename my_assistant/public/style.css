@@ -338,3 +338,10 @@ button:hover {
 ::-webkit-scrollbar-thumb:hover {
   background: #16a085;
 }
+#taskCompleted {
+  margin: 5px 0;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  width: 100%;
+}

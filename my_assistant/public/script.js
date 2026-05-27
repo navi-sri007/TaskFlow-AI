@@ -48,6 +48,7 @@ document.getElementById("taskForm")?.addEventListener("submit", async (e) => {
   const taskData = {
     title: document.getElementById("taskTitle").value,
     priority: document.getElementById("taskPriority").value,
+    completed: document.getElementById("taskCompleted").value === "true", // Convert string to boolean
     dueDate: document.getElementById("taskDueDate").value || null,
   };
 
@@ -85,6 +86,7 @@ async function loadTasks() {
             <div class="item-card">
                 <strong>${task.title}</strong><br>
                 📌 Priority: ${task.priority}<br>
+                ✅ Completed: ${task.completed ? "Yes" : "No"}<br>
                 ${task.dueDate ? `📅 Due: ${formatISTDate(task.dueDate)}` : "⏰ No due date"}
             </div>
         `,
