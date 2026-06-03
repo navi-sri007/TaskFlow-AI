@@ -1,3 +1,6 @@
+process.env.TZ = "Asia/Kolkata";
+require("dotenv").config();
+const API_BASE_URL = import.meta.env.API_BASE_URL;
 // Format UTC ISO dates from API as IST for display
 function formatISTDate(date) {
   if (!date) return "No date";
@@ -11,7 +14,6 @@ function formatISTDate(date) {
     hour12: true,
   }).format(new Date(date));
 }
-
 // ========== TAB SWITCHING ==========
 function switchTab(tabName) {
   // Hide all tabs
@@ -53,7 +55,7 @@ document.getElementById("taskForm")?.addEventListener("submit", async (e) => {
   };
 
   try {
-    const response = await fetch("/api/tasks", {
+    const response = await fetch(`${API_BASE_URL}/api/tasks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(taskData),
@@ -71,7 +73,7 @@ document.getElementById("taskForm")?.addEventListener("submit", async (e) => {
 
 async function loadTasks() {
   try {
-    const response = await fetch("/api/tasks");
+    const response = await fetch(`${API_BASE_URL}/api/tasks`);
     const tasks = await response.json();
 
     const tasksList = document.getElementById("tasksList");
@@ -107,7 +109,7 @@ document.getElementById("noteForm")?.addEventListener("submit", async (e) => {
   };
 
   try {
-    const response = await fetch("/api/notes", {
+    const response = await fetch(`${API_BASE_URL}/api/notes`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(noteData),
@@ -128,7 +130,7 @@ let currentEditingNoteId = null;
 
 async function loadNotes() {
   try {
-    const response = await fetch("/api/notes");
+    const response = await fetch(`${API_BASE_URL}/api/notes`);
     const notes = await response.json();
 
     const notesList = document.getElementById("notesList");
@@ -178,7 +180,7 @@ function escapeHtml(str) {
 async function openEditNoteModal(noteId) {
   try {
     // Fetch the specific note details
-    const response = await fetch(`/api/notes/${noteId}`);
+    const response = await fetch(`${API_BASE_URL}/api/notes/${noteId}`);
     if (!response.ok) {
       throw new Error("Failed to fetch note");
     }
@@ -262,11 +264,14 @@ async function updateNote() {
   };
 
   try {
-    const response = await fetch(`/api/notes/${currentEditingNoteId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(updateData),
-    });
+    const response = await fetch(
+      `${API_BASE_URL}/api/notes/${currentEditingNoteId}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updateData),
+      },
+    );
 
     if (response.ok) {
       showFloatingMessage("✅ Note updated successfully!", "success");
@@ -298,7 +303,7 @@ async function deleteNote(noteId) {
   }
 
   try {
-    const response = await fetch(`/api/notes/${noteId}`, {
+    const response = await fetch(`${API_BASE_URL}/api/notes/${noteId}`, {
       method: "DELETE",
     });
 
@@ -362,7 +367,7 @@ if (originalNoteFormHandler) {
     };
 
     try {
-      const response = await fetch("/api/notes", {
+      const response = await fetch(`${API_BASE_URL}/api/notes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(noteData),
@@ -404,7 +409,9 @@ console.log(
 async function deleteTask(taskId) {
   if (!confirm("Delete this task?")) return;
   try {
-    const res = await fetch(`/api/tasks/${taskId}`, { method: "DELETE" });
+    const res = await fetch(`${API_BASE_URL}/api/tasks/${taskId}`, {
+      method: "DELETE",
+    });
     if (res.ok) {
       showFloatingMessage("Task deleted", "success");
       loadTasks();
@@ -445,7 +452,7 @@ document
     };
 
     try {
-      const response = await fetch("/api/reminders", {
+      const response = await fetch(`${API_BASE_URL}/api/reminders`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(reminderData),
@@ -463,7 +470,7 @@ document
 
 async function loadReminders() {
   try {
-    const response = await fetch("/api/reminders");
+    const response = await fetch(`${API_BASE_URL}/api/reminders`);
     const reminders = await response.json();
 
     const remindersList = document.getElementById("remindersList");
@@ -517,7 +524,7 @@ async function sendMessage() {
     }
   }
   try {
-    const response = await fetch("/api/chat", {
+    const response = await fetch(`${API_BASE_URL}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: message, sessionId: sessionId }),
@@ -569,7 +576,7 @@ async function sendMessage() {
   showTypingIndicator();
 
   try {
-    const response = await fetch("/api/chat", {
+    const response = await fetch(`${API_BASE_URL}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: message, sessionId: sessionId }),
@@ -606,7 +613,9 @@ async function sendMessage() {
 }
 async function searchRelated(keyword) {
   try {
-    const response = await fetch(`/api/search/${encodeURIComponent(keyword)}`);
+    const response = await fetch(
+      `${API_BASE_URL}/api/search/${encodeURIComponent(keyword)}`,
+    );
     const data = await response.json();
 
     if (!data || !data.task) {
