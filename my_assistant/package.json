@@ -9,6 +9,7 @@
     "cors": "^2.8.6",
     "dotenv": "^17.0.0",
     "express": "^5.2.1",
+    "grok-sdk": "^0.0.1-security",
     "mongoose": "^9.6.3"
   }
 }
