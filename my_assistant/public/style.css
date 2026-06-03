@@ -345,3 +345,351 @@ button:hover {
   border-radius: 4px;
   width: 100%;
 }
+/* Note editing styles - Add to existing style.css */
+.note-editor-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  animation: fadeIn 0.2s ease;
+}
+
+.note-editor-modal {
+  background: white;
+  border-radius: 1.5rem;
+  width: 90%;
+  max-width: 650px;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+  animation: slideUp 0.25s ease;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.note-editor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 2px solid #e2e8f0;
+  background: #f8fafc;
+  border-radius: 1.5rem 1.5rem 0 0;
+}
+
+.note-editor-header h3 {
+  font-size: 1.3rem;
+  color: #0b2b42;
+  margin: 0;
+}
+
+.close-editor {
+  background: none;
+  border: none;
+  font-size: 1.8rem;
+  cursor: pointer;
+  color: #64748b;
+  transition: 0.2s;
+  padding: 0 8px;
+  line-height: 1;
+}
+
+.close-editor:hover {
+  color: #dc2626;
+  transform: scale(1.1);
+}
+
+.note-editor-body {
+  padding: 1.5rem;
+}
+
+.edit-note-title {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  font-size: 1.1rem;
+  border: 2px solid #e2e8f0;
+  border-radius: 0.75rem;
+  margin-bottom: 1rem;
+  font-weight: 500;
+  transition: 0.2s;
+}
+
+.edit-note-title:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.edit-note-content {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  font-size: 0.95rem;
+  border: 2px solid #e2e8f0;
+  border-radius: 0.75rem;
+  font-family: inherit;
+  resize: vertical;
+  transition: 0.2s;
+}
+
+.edit-note-content:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.note-editor-footer {
+  padding: 1rem 1.5rem 1.5rem;
+  display: flex;
+  gap: 1rem;
+  justify-content: flex-end;
+  border-top: 1px solid #e2e8f0;
+  background: #fefefe;
+}
+
+.btn-update {
+  background: #3b82f6;
+  color: white;
+  padding: 0.6rem 1.5rem;
+  border: none;
+  border-radius: 2rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-update:hover {
+  background: #2563eb;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.btn-cancel {
+  background: #e2e8f0;
+  color: #334155;
+  padding: 0.6rem 1.5rem;
+  border: none;
+  border-radius: 2rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.btn-cancel:hover {
+  background: #cbd5e1;
+}
+
+.item-card {
+  background: white;
+  border-radius: 1rem;
+  padding: 1rem 1.2rem;
+  margin-bottom: 0.85rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  border: 1px solid #eef2ff;
+  transition: all 0.2s;
+  position: relative;
+}
+
+.item-card:hover {
+  transform: translateX(4px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  border-color: #cbdffc;
+}
+
+.note-actions {
+  margin-top: 0.75rem;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+  border-top: 1px solid #f0f2f5;
+  padding-top: 0.75rem;
+}
+
+.edit-note-btn {
+  background: #3b82f6;
+  color: white;
+  border: none;
+  padding: 0.35rem 1rem;
+  border-radius: 1.5rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.edit-note-btn:hover {
+  background: #2563eb;
+  transform: scale(1.02);
+}
+
+.delete-note-btn {
+  background: #ef4444;
+  color: white;
+  border: none;
+  padding: 0.35rem 1rem;
+  border-radius: 1.5rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.delete-note-btn:hover {
+  background: #dc2626;
+}
+
+.update-status {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: #10b981;
+  color: white;
+  padding: 12px 20px;
+  border-radius: 40px;
+  font-weight: 500;
+  z-index: 1000;
+  animation: slideInRight 0.3s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(100px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.note-meta {
+  font-size: 0.7rem;
+  color: #6c757d;
+  margin-top: 8px;
+  display: block;
+}
+/* Delete buttons styling for tasks and reminders - Add to existing style.css */
+.delete-task-btn,
+.delete-reminder-btn {
+  background: #ef4444;
+  color: white;
+  border: none;
+  padding: 0.35rem 1rem;
+  border-radius: 1.5rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.delete-task-btn:hover,
+.delete-reminder-btn:hover {
+  background: #dc2626;
+  transform: scale(1.02);
+}
+
+.edit-task-btn {
+  background: #3b82f6;
+  color: white;
+  border: none;
+  padding: 0.35rem 1rem;
+  border-radius: 1.5rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 0.5rem;
+}
+
+.edit-task-btn:hover {
+  background: #2563eb;
+  transform: scale(1.02);
+}
+
+.task-actions,
+.reminder-actions {
+  margin-top: 0.75rem;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+  border-top: 1px solid #f0f2f5;
+  padding-top: 0.75rem;
+}
+
+/* Task status badge */
+.task-status {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 1rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  margin-left: 0.5rem;
+}
+
+.task-status.completed {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.task-status.pending {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+/* Priority badges */
+.priority-badge {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 1rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  margin-left: 0.5rem;
+}
+
+.priority-high {
+  background: #fecaca;
+  color: #991b1b;
+}
+
+.priority-medium {
+  background: #fed7aa;
+  color: #92400e;
+}
+
+.priority-low {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.priority-important {
+  background: #e9d5ff;
+  color: #6b21a5;
+}

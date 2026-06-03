@@ -123,6 +123,9 @@ document.getElementById("noteForm")?.addEventListener("submit", async (e) => {
   }
 });
 
+// Store current note being edited
+let currentEditingNoteId = null;
+
 async function loadNotes() {
   try {
     const response = await fetch("/api/notes");
@@ -130,25 +133,305 @@ async function loadNotes() {
 
     const notesList = document.getElementById("notesList");
     if (!notes.length) {
-      notesList.innerHTML = "<p>No notes yet. Add one above!</p>";
+      notesList.innerHTML = "<p>📭 No notes yet. Add one above!</p>";
       return;
     }
 
     notesList.innerHTML = notes
       .map(
         (note) => `
-            <div class="item-card">
-                <strong>${note.title}</strong><br>
-                ${note.content.substring(0, 100).replace(/\n/g, "<br>")}${note.content.length > 100 ? "..." : ""}<br>
-                <small>📅 ${formatISTDate(note.createdAt)}</small>
+            <div class="item-card" data-note-id="${note.id || note._id}">
+                <strong>📄 ${escapeHtml(note.title)}</strong><br>
+                <div class="note-preview">${escapeHtml(note.content.substring(0, 120))}${note.content.length > 120 ? "..." : ""}</div>
+                <small class="note-meta">📅 ${formatISTDate(note.createdAt)}</small>
+                <div class="note-actions">
+                    <button class="edit-note-btn" onclick="openEditNoteModal('${note.id || note._id}')">
+                        ✏️ Edit
+                    </button>
+                    <button class="delete-note-btn" onclick="deleteNote('${note.id || note._id}')">
+                        🗑️ Delete
+                    </button>
+                </div>
             </div>
         `,
       )
       .join("");
   } catch (error) {
     console.error("Error loading notes:", error);
+    document.getElementById("notesList").innerHTML =
+      "<p style='color: #dc2626;'>⚠️ Failed to load notes. Make sure backend is running.</p>";
   }
 }
+
+// Helper function to escape HTML to prevent XSS
+function escapeHtml(str) {
+  if (!str) return "";
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+    .replace(/\n/g, "<br>");
+}
+// Open modal to edit note
+async function openEditNoteModal(noteId) {
+  try {
+    // Fetch the specific note details
+    const response = await fetch(`/api/notes/${noteId}`);
+    if (!response.ok) {
+      throw new Error("Failed to fetch note");
+    }
+    const note = await response.json();
+
+    currentEditingNoteId = noteId;
+
+    // Create modal overlay
+    const modal = document.createElement("div");
+    modal.className = "note-editor-overlay";
+    modal.id = "noteEditorModal";
+    modal.innerHTML = `
+      <div class="note-editor-modal">
+        <div class="note-editor-header">
+          <h3>✏️ Edit Note</h3>
+          <button class="close-editor" onclick="closeNoteEditor()">&times;</button>
+        </div>
+        <div class="note-editor-body">
+          <input type="text" id="editNoteTitleInput" class="edit-note-title" value="${escapeHtmlAttribute(note.title)}" placeholder="Note title">
+          <textarea id="editNoteContentInput" class="edit-note-content" rows="8" placeholder="Write your note content here...">${escapeHtmlAttribute(note.content)}</textarea>
+        </div>
+        <div class="note-editor-footer">
+          <button class="btn-cancel" onclick="closeNoteEditor()">Cancel</button>
+          <button class="btn-update" onclick="updateNote()">💾 Save Changes</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    // Close on overlay click
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) closeNoteEditor();
+    });
+  } catch (error) {
+    console.error("Error opening editor:", error);
+    showFloatingMessage("Could not load note for editing", "error");
+  }
+}
+
+// Helper to escape for HTML attributes
+function escapeHtmlAttribute(str) {
+  if (!str) return "";
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Close the note editor modal
+function closeNoteEditor() {
+  const modal = document.getElementById("noteEditorModal");
+  if (modal) {
+    modal.remove();
+  }
+  currentEditingNoteId = null;
+}
+
+// Update note via PUT/PATCH request
+async function updateNote() {
+  if (!currentEditingNoteId) {
+    showFloatingMessage("No note selected", "error");
+    return;
+  }
+
+  const updatedTitle = document
+    .getElementById("editNoteTitleInput")
+    .value.trim();
+  const updatedContent = document.getElementById("editNoteContentInput").value;
+
+  if (!updatedTitle) {
+    showFloatingMessage("Title cannot be empty", "error");
+    return;
+  }
+
+  const updateData = {
+    title: updatedTitle || "Untitled",
+    content: updatedContent || "",
+  };
+
+  try {
+    const response = await fetch(`/api/notes/${currentEditingNoteId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updateData),
+    });
+
+    if (response.ok) {
+      showFloatingMessage("✅ Note updated successfully!", "success");
+      closeNoteEditor();
+      loadNotes(); // Refresh notes list
+    } else if (response.status === 404) {
+      showFloatingMessage("Note not found (maybe deleted)", "error");
+      closeNoteEditor();
+      loadNotes();
+    } else {
+      const errorText = await response.text();
+      console.error("Update failed:", errorText);
+      showFloatingMessage("Failed to update note", "error");
+    }
+  } catch (error) {
+    console.error("Error updating note:", error);
+    showFloatingMessage("Network error while updating", "error");
+  }
+}
+
+// Delete note function
+async function deleteNote(noteId) {
+  if (
+    !confirm(
+      "⚠️ Are you sure you want to delete this note? This action cannot be undone.",
+    )
+  ) {
+    return;
+  }
+
+  try {
+    const response = await fetch(`/api/notes/${noteId}`, {
+      method: "DELETE",
+    });
+
+    if (response.ok) {
+      showFloatingMessage("🗑️ Note deleted successfully", "success");
+      loadNotes(); // Refresh the notes list
+    } else if (response.status === 404) {
+      showFloatingMessage("Note already deleted", "info");
+      loadNotes();
+    } else {
+      showFloatingMessage("Could not delete note", "error");
+    }
+  } catch (error) {
+    console.error("Error deleting note:", error);
+    showFloatingMessage("Error deleting note", "error");
+  }
+}
+
+// Floating message helper (toast)
+function showFloatingMessage(message, type = "success") {
+  // Remove existing floating message
+  const existing = document.querySelector(".update-status");
+  if (existing) existing.remove();
+
+  const toast = document.createElement("div");
+  toast.className = "update-status";
+  toast.style.background =
+    type === "success" ? "#10b981" : type === "error" ? "#ef4444" : "#3b82f6";
+  toast.textContent = message;
+  document.body.appendChild(toast);
+
+  setTimeout(() => {
+    toast.style.opacity = "0";
+    toast.style.transform = "translateX(100px)";
+    setTimeout(() => toast.remove(), 300);
+  }, 2800);
+}
+
+// Override existing notification to avoid conflicts
+window.showNotification =
+  window.showNotification ||
+  function (msg) {
+    showFloatingMessage(msg, "success");
+  };
+
+// Also update the note form submission to refresh after saving
+const originalNoteFormHandler = document.getElementById("noteForm");
+if (originalNoteFormHandler) {
+  // Remove any existing listener to prevent duplicate, then attach
+  const newForm = originalNoteFormHandler.cloneNode(true);
+  originalNoteFormHandler.parentNode.replaceChild(
+    newForm,
+    originalNoteFormHandler,
+  );
+
+  newForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const noteData = {
+      title: document.getElementById("noteTitle").value || "Untitled",
+      content: document.getElementById("noteContent").value,
+    };
+
+    try {
+      const response = await fetch("/api/notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(noteData),
+      });
+
+      if (response.ok) {
+        showFloatingMessage("📝 Note saved successfully!", "success");
+        document.getElementById("noteForm").reset();
+        loadNotes();
+      } else {
+        showFloatingMessage("Error saving note", "error");
+      }
+    } catch (error) {
+      console.error("Error saving note:", error);
+      showFloatingMessage("Failed to save note", "error");
+    }
+  });
+}
+
+// ========== BACKEND API FALLBACK HANDLING (for demo purposes) ==========
+// Note: This frontend expects backend REST endpoints:
+// GET    /api/notes
+// POST   /api/notes
+// GET    /api/notes/:id
+// PUT    /api/notes/:id
+// DELETE /api/notes/:id
+// If your backend currently doesn't support PUT/DELETE for individual notes,
+// you'll need to implement those routes. I'll add a compatibility note.
+
+console.log(
+  "✅ Notes editor enhancement loaded (Edit/Update/Delete supported)",
+);
+console.log(
+  "💡 Make sure your backend has PUT /api/notes/:id and DELETE /api/notes/:id",
+);
+
+// ========== TASKS & REMINDERS remain same (optional: add delete for tasks) ==========
+// Add optional quick delete for tasks to keep consistency
+async function deleteTask(taskId) {
+  if (!confirm("Delete this task?")) return;
+  try {
+    const res = await fetch(`/api/tasks/${taskId}`, { method: "DELETE" });
+    if (res.ok) {
+      showFloatingMessage("Task deleted", "success");
+      loadTasks();
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+// ========== Refresh on tab switch for notes ==========
+// Ensure notes load properly when switching to notes tab
+const originalSwitchTab = window.switchTab;
+if (originalSwitchTab) {
+  window.switchTab = function (tabName) {
+    originalSwitchTab(tabName);
+    if (tabName === "notes") {
+      loadNotes();
+    }
+  };
+}
+
+// Make functions globally accessible for inline onclick handlers
+window.openEditNoteModal = openEditNoteModal;
+window.closeNoteEditor = closeNoteEditor;
+window.updateNote = updateNote;
+window.deleteNote = deleteNote;
+window.showFloatingMessage = showFloatingMessage;
 
 // ========== REMINDERS ==========
 document

@@ -1259,6 +1259,45 @@ app.delete("/api/notes/:id", async (req, res) => {
   }
 });
 
+// ========== ADD THESE ROUTES TO YOUR BACKEND (Express example) ==========
+
+// GET single note by ID
+app.get("/api/notes/:id", async (req, res) => {
+  try {
+    const note = await Note.findById(req.params.id); // or your DB method
+    if (!note) return res.status(404).json({ error: "Note not found" });
+    res.json(note);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// UPDATE note (PUT)
+app.put("/api/notes/:id", async (req, res) => {
+  try {
+    const { title, content } = req.body;
+    const updatedNote = await Note.findByIdAndUpdate(
+      req.params.id,
+      { title, content, updatedAt: new Date() },
+      { new: true, runValidators: true },
+    );
+    if (!updatedNote) return res.status(404).json({ error: "Note not found" });
+    res.json(updatedNote);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// DELETE note
+app.delete("/api/notes/:id", async (req, res) => {
+  try {
+    const deletedNote = await Note.findByIdAndDelete(req.params.id);
+    if (!deletedNote) return res.status(404).json({ error: "Note not found" });
+    res.json({ message: "Note deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 // Search by keyword
 app.get("/api/search/:keyword", async (req, res) => {
   const result = await searchAllByKeyword(req.params.keyword);
