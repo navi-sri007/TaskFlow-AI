@@ -1,6 +1,6 @@
 process.env.TZ = "Asia/Kolkata";
 require("dotenv").config();
-const API_BASE_URL = import.meta.env.API_BASE_URL;
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 // Format UTC ISO dates from API as IST for display
 function formatISTDate(date) {
   if (!date) return "No date";
