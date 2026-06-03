@@ -6,6 +6,7 @@
     "start": "node server.js"
   },
   "dependencies": {
+    "chrono-node": "^2.9.1",
     "cors": "^2.8.6",
     "dotenv": "^17.0.0",
     "express": "^5.2.1",
