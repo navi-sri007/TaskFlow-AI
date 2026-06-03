@@ -1,0 +1,6 @@
+{
+  "version": 2,
+  "buildCommand": "node scripts/generate-config.js",
+  "outputDirectory": "public",
+  "installCommand": "echo \"No install needed for static frontend\""
+}

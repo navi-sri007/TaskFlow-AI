@@ -6,11 +6,58 @@ const express = require("express");
 const cors = require("cors");
 
 const app = express();
-app.use(cors());
+
+function buildCorsOptions() {
+  const fromEnv = (process.env.FRONTEND_URL || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const extra = (process.env.CORS_ORIGINS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const allowed = [...new Set([...fromEnv, ...extra])];
+
+  return {
+    origin(origin, callback) {
+      if (!origin) return callback(null, true);
+      if (allowed.length === 0) return callback(null, true);
+      const ok = allowed.some(
+        (a) => origin === a || origin.startsWith(a.replace(/\/$/, "")),
+      );
+      if (ok) return callback(null, true);
+      console.warn(`CORS blocked origin: ${origin}`);
+      callback(new Error(`CORS: origin ${origin} not allowed`));
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  };
+}
+
+app.use(cors(buildCorsOptions()));
 app.use(express.json());
+
+// API routes must be registered before static files (split deploy: Vercel UI + Render API)
+app.get("/api/health", (req, res) => {
+  res.json({
+    ok: true,
+    service: "taskflow-backend",
+    time: new Date().toISOString(),
+  });
+});
+
 app.use(express.static("public"));
 
-mongoose.connect(process.env.MONGODB_URL);
+const mongoUrl = process.env.MONGODB_URL;
+if (!mongoUrl) {
+  console.error("MONGODB_URL is not set — API will fail until configured on Render.");
+} else {
+  mongoose
+    .connect(mongoUrl)
+    .then(() => console.log("MongoDB connected"))
+    .catch((err) => console.error("MongoDB connection error:", err.message));
+}
 
 const Task = require("./models/Task.js");
 const Note = require("./models/Note.js");

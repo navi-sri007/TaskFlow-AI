@@ -1,6 +1,50 @@
-process.env.TZ = "Asia/Kolkata";
-require("dotenv").config();
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+/**
+ * API base URL is set in config.js (local) or generated on Vercel deploy.
+ * Must point to your Render backend, e.g. https://your-app.onrender.com
+ */
+function getApiBaseUrl() {
+  const raw = window.API_BASE_URL;
+  if (raw && String(raw).trim()) {
+    return String(raw).trim().replace(/\/$/, "");
+  }
+  const host = window.location.hostname;
+  if (host === "localhost" || host === "127.0.0.1") {
+    return "http://localhost:3000";
+  }
+  // Backend + frontend on same Render service
+  if (host.endsWith(".onrender.com")) {
+    return "";
+  }
+  console.error(
+    "API_BASE_URL is not set. Add public/config.js or set API_BASE_URL on Vercel.",
+  );
+  return "";
+}
+
+const API_BASE_URL = getApiBaseUrl();
+
+async function apiFetch(path, options = {}) {
+  if (!API_BASE_URL) {
+    throw new Error(
+      "Backend URL not configured. Set window.API_BASE_URL in config.js (see config.example.js).",
+    );
+  }
+  const url = `${API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(
+      `API ${response.status} ${response.statusText}: ${text.slice(0, 200)}`,
+    );
+  }
+  return response;
+}
 // Format UTC ISO dates from API as IST for display
 function formatISTDate(date) {
   if (!date) return "No date";

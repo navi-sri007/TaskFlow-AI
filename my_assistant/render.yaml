@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: taskflow-backend
+    env: node
+    rootDir: my_assistant
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: MONGODB_URL
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
